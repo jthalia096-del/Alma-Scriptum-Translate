@@ -88,7 +88,7 @@ def criar_nome_final(nome_original):
     if not nome:
         nome = "Livro"
 
-    return f"{nome} - [PT-BR] - Alma Scriptum.epub"
+    return f"{nome} ° [PT-BR] ° Alma Scriptum.epub"
 
 
 def nome_mecanismo(mecanismo):
@@ -127,17 +127,28 @@ def substituir_sites_por_marca(texto):
         return texto
 
     padroes = [
-        r"OceanofPDF\.com", r"OceanOfPDF\.com", r"OceanPDF\.com",
-        r"oceanofpdf\.com", r"oceanofpdf", r"OceanofPDF",
-        r"Ocean Of PDF", r"Ocean PDF",
-        r"z-library\.sk", r"z-library", r"zlib",
-        r"1lib\.sk", r"1lib",
+        r"OceanofPDF\.com",
+        r"OceanOfPDF\.com",
+        r"OceanPDF\.com",
+        r"oceanofpdf\.com",
+        r"oceanofpdf",
+        r"OceanofPDF",
+        r"Ocean Of PDF",
+        r"Ocean PDF",
+        r"z-library\.sk",
+        r"z-library",
+        r"zlib",
+        r"1lib\.sk",
+        r"1lib",
+        r"z-lib\.org",
+        r"z-lib",
     ]
 
     for p in padroes:
-        texto = re.sub(p, "Alma Scriptum Translate", texto, flags=re.IGNORECASE)
+        texto = re.sub(p, "", texto, flags=re.IGNORECASE)
 
-    return texto
+    texto = re.sub(r"\s{2,}", " ", texto)
+    return texto.strip()
 
 
 def revisar_texto_final(texto):
