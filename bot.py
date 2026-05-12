@@ -408,12 +408,14 @@ def separar_por_sep(texto, quantidade):
 
 def traduzir_bloco_sync(item):
     bloco_id, textos, mecanismo = item
+
     textos = [substituir_sites_por_marca(t) for t in textos]
 
     junto = ""
 
     for i, texto in enumerate(textos):
         junto += texto
+
         if i < len(textos) - 1:
             junto += "\n\n" + criar_sep(i) + "\n\n"
 
@@ -421,6 +423,7 @@ def traduzir_bloco_sync(item):
 
     if not erro:
         partes = separar_por_sep(traducao, len(textos))
+
         if len(partes) == len(textos):
             partes = [revisar_texto_final(p) for p in partes]
             return bloco_id, partes, []
@@ -429,28 +432,56 @@ def traduzir_bloco_sync(item):
     erros = []
 
     for idx, texto in enumerate(textos, start=1):
+
         if texto_sujo(texto):
             partes_finais.append(texto)
             continue
 
         t, e = traduzir_com_fallback(texto, mecanismo)
-        partes_finais.append(revisar_texto_final(t))
 
+        texto_final = revisar_texto_final(t)
+
+        partes_finais.append(texto_final)
+
+        # Só adiciona ponto de atenção
+        # se REALMENTE sobrou problema
         if e:
-            erros.append({
-                "bloco": bloco_id,
-                "trecho_num": idx,
-                "motivo": e,
-                "texto": texto_curto(substituir_sites_por_marca(texto)),
-            })
 
-    if erro and not texto_sujo(junto):
-        erros.append({
-            "bloco": bloco_id,
-            "trecho_num": 0,
-            "motivo": "merge falhou, usado fallback automático",
-            "texto": texto_curto(substituir_sites_por_marca(junto)),
-        })
+            ainda_tem_ingles = bool(re.search(
+                r"\b(the|and|with|you|your|she|he|they|this|that|was|were|have|from|into|would|could|should)\b",
+                texto_final,
+                flags=re.IGNORECASE
+            ))
+
+            palavra_grudada = bool(re.search(
+                r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}",
+                texto_final
+            ))
+
+            site_sobrou = bool(re.search(
+                r"oceanofpdf|z-library|1lib|z-lib",
+                texto_final,
+                flags=re.IGNORECASE
+            ))
+
+            texto_igual_original = (
+                texto_final.strip().lower() ==
+                texto.strip().lower()
+            )
+
+            if (
+                ainda_tem_ingles
+                or palavra_grudada
+                or site_sobrou
+                or texto_igual_original
+            ):
+
+                erros.append({
+                    "bloco": bloco_id,
+                    "trecho_num": idx,
+                    "motivo": "precisa de revisão manual",
+                    "texto": texto_curto(texto_final),
+                })
 
     return bloco_id, partes_finais, erros
 
