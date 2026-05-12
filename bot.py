@@ -65,22 +65,31 @@ def criar_nome_final(nome_original):
 
     nome = nome.replace("_", " ")
     nome = nome.replace("-", " ")
-    nome = re.sub(r"\s+", " ", nome).strip()
     nome = re.sub(r"\s*\([^)]*\)", " ", nome)
 
     sujeiras = [
-        r"TRADUZIDO", r"PTBR", r"PT BR", r"PT_BR", r"BR PT BR",
-        r"\[PT-BR\]", r"\[PTBR\]", r"Alma Scriptum",
-        r"Alma Scriptum Translate", r"Translate", r"REVISADO",
-        r"z-library\.sk", r"zlibrary", r"z library",
-        r"z-lib\.org", r"z-lib", r"zlib",
-        r"1lib\.sk", r"1lib", r"library",
-        r"oceanofpdf\.com", r"oceanofpdf",
-        r"ocean of pdf", r"oceanpdf", r"ocean",
+        r"z[\s\-_]*library[\s\._\-]*sk",
+        r"z[\s\-_]*lib[\s\._\-]*sk",
+        r"z[\s\-_]*lib",
+        r"1lib[\s\._\-]*sk",
+        r"1lib",
+        r"sk",
+        r"oceanofpdf[\s\._\-]*com",
+        r"oceanofpdf",
+        r"ocean pdf",
+        r"pt[\s\-_]*br",
+        r"ptbr",
+        r"br[\s\-_]*pt[\s\-_]*br",
+        r"\[pt-br\]",
+        r"alma scriptum translate",
+        r"alma scriptum",
+        r"translate",
+        r"traduzido",
+        r"revisado",
     ]
 
-    for s in sujeiras:
-        nome = re.sub(s, " ", nome, flags=re.IGNORECASE)
+    for item in sujeiras:
+        nome = re.sub(item, " ", nome, flags=re.IGNORECASE)
 
     nome = re.sub(r"[,;:]+", " ", nome)
     nome = re.sub(r"\s+", " ", nome).strip()
@@ -88,7 +97,7 @@ def criar_nome_final(nome_original):
     if not nome:
         nome = "Livro"
 
-    return f"{nome} ° [PT-BR] ° Alma Scriptum.epub"
+    return f"{nome} - [PT-BR] - Alma Scriptum.epub"
 
 
 def nome_mecanismo(mecanismo):
