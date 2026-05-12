@@ -1,0 +1,7 @@
+python-telegram-bot==22.7
+EbookLib==0.20
+beautifulsoup4==4.12.3
+deep-translator==1.11.4
+html5lib==1.1
+pytz==2024.1
+tzlocal==2.1
