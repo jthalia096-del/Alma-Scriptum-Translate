@@ -1,3 +1,4 @@
+import os
 import re
 import uuid
 import json
@@ -23,10 +24,11 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = "8712781592:AAEPuOs8E9NJAwsog18rWI8IzxskkTHTfig"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 IDS_LIBERADOS = {
     8672397104,
+    1130170420,
 }
 
 BASE_DIR = Path(__file__).parent
