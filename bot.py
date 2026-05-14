@@ -602,7 +602,7 @@ async def traduzir_blocos(blocos, mecanismo, workers):
     return resultados
 
 
-async def traduzir_html(html, mecanismo, arquivo_nome=""):
+async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
     soup = BeautifulSoup(html, "html.parser")
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
@@ -634,7 +634,12 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
     alterados = 0
 
     for bloco_id, partes_traduzidas, erros_bloco in resultados:
-        bloco = mapa_blocos.get(bloco_id, [])
+
+    if user_id in cancelamentos:
+        raise Exception("Tradução cancelada.")
+
+    bloco = mapa_blocos.get(bloco_id, [])
+    
 
         if len(partes_traduzidas) != len(bloco):
             primeiro_texto = texto_curto(bloco[0][2] if bloco else "Trecho não identificado")
@@ -838,10 +843,11 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
             arquivo_nome = getattr(item, "file_name", f"arquivo_{i}")
             traduzido, alterados, erros_html = await traduzir_html(
-                conteudo,
-                mecanismo,
-                arquivo_nome,
-            )
+              conteudo,
+              mecanismo,
+              arquivo_nome,
+              user_id,
+         )
 
             for erro in erros_html:
                 erro["arquivo"] = f"{i}/{total}"
