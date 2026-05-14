@@ -26,7 +26,6 @@ from telegram.ext import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-
 IDS_LIBERADOS = {
     8672397104,
     1130170420,
