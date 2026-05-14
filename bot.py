@@ -26,6 +26,7 @@ from telegram.ext import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+
 IDS_LIBERADOS = {
     8672397104,
     1130170420,
@@ -285,9 +286,11 @@ def google_new_translate(texto):
         "query.target_language": "pt",
         "query.display_language": "pt-BR",
         "data_types": "TRANSLATION",
-        "key": "AIzaSyDLEeFI5OtFBwYBIoK_jj5m32rZK5CkCXA",
         "query.text": texto,
     }
+    if GOOGLE_NEW_KEY:
+        data["key"] = GOOGLE_NEW_KEY
+
     resposta = request_url(url, data=data, headers=headers, method="GET")
     return json.loads(resposta)["translation"]
 
@@ -298,9 +301,11 @@ def google_html_translate(texto):
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Content-Type": "application/json+protobuf",
-        "X-Goog-Api-Key": "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/133.0.0.0 Safari/537.36",
     }
+    if GOOGLE_HTML_KEY:
+        headers["X-Goog-Api-Key"] = GOOGLE_HTML_KEY
+
     body = json.dumps([[[texto], "en", "pt"], "wt_lib"])
     resposta = request_url(url, data=body, headers=headers, method="POST")
     return json.loads(resposta)[0][0]
@@ -602,6 +607,40 @@ async def traduzir_blocos(blocos, mecanismo, workers):
     return resultados
 
 
+
+def corrigir_no_texto_html(texto):
+    """Limpa somente texto visível, sem mexer nas tags/estilos do EPUB."""
+    if not texto:
+        return texto
+
+    inicio = re.match(r"^\s*", texto).group(0)
+    fim = re.search(r"\s*$", texto).group(0)
+    meio = texto.strip()
+
+    if not meio:
+        return texto
+
+    meio = revisar_texto_final(meio)
+    return inicio + meio + fim
+
+
+def finalizar_html_preservando_estilo(html):
+    """Correções finais sem destruir CSS, classes, spans, itálicos ou balões de mensagem."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    for node in soup.find_all(string=True):
+        if not texto_visivel(node):
+            continue
+
+        original = str(node)
+        novo = corrigir_no_texto_html(original)
+
+        if novo != original:
+            node.replace_with(NavigableString(novo))
+
+    return str(soup)
+
+
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
     soup = BeautifulSoup(html, "html.parser")
     capitulo = contexto_capitulo(soup, arquivo_nome)
@@ -652,7 +691,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
-                node.replace_with(texto_final)
+                node.replace_with(NavigableString(texto_final))
 
                 if texto_final.strip() != original.strip():
                     alterados += 1
@@ -664,20 +703,9 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
-    html_final = str(soup)
-    html_final = html_lib.unescape(html_final)
-    html_final = substituir_sites_por_marca(html_final)
-
-    html_final = re.sub(r"([a-záàâãéêíóôõúç])(<[^/][^>]*>)([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2\3", html_final)
-    html_final = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", html_final)
-    html_final = re.sub(r"([.!?])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2", html_final)
-
-    html_final = html_final.replace("deTODOS", "de TODOS")
-    html_final = html_final.replace("TODOS.Cada", "TODOS. Cada")
-    html_final = html_final.replace("completaincluindo", "completa incluindo")
-    html_final = html_final.replace("paraaNo", "para a No")
-    html_final = html_final.replace("passaEm", "passa em")
-    html_final = html_final.replace("eununcadeixarei", "eu nunca deixarei")
+    # Importante: não aplicar regex no HTML inteiro.
+    # Isso preserva classes, CSS, spans, itálico, negrito e balões/mensagens do EPUB.
+    html_final = finalizar_html_preservando_estilo(str(soup))
 
     return html_final, alterados, erros
 
@@ -1087,6 +1115,9 @@ async def erro_global(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN não configurado. Coloque BOT_TOKEN nas variáveis do Railway.")
+
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
