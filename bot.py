@@ -40,15 +40,15 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 6500
-REQUEST_ATTEMPTS = 2
-REQUEST_TIMEOUT = 35
-REQUEST_INTERVAL = 0.03
+MERGE_LENGTH = 4200
+REQUEST_ATTEMPTS = 3
+REQUEST_TIMEOUT = 25
+REQUEST_INTERVAL = 0.08
 
 CONFIGS = {
-    "google_new": {"nome": "🌐 Google Free New", "workers": 8},
-    "google_html": {"nome": "📄 Google Free HTML", "workers": 6},
-    "google_old": {"nome": "🕰️ Google Free Old", "workers": 5},
+    "google_new": {"nome": "🌐 Google Free New", "workers": 14},
+    "google_html": {"nome": "📄 Google Free HTML", "workers": 10},
+    "google_old": {"nome": "🕰️ Google Free Old", "workers": 7},
 }
 
 SEP_TEMPLATE = "{{{{id_{}}}}}"
@@ -652,11 +652,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
-
-                # IMPORTANTE:
-                # troca somente o texto interno do EPUB,
-                # sem apagar a tag, classe, span, itálico ou estilo original.
-                node.replace_with(NavigableString(texto_final))
+                node.replace_with(texto_final)
 
                 if texto_final.strip() != original.strip():
                     alterados += 1
@@ -668,11 +664,22 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
-    # NÃO mexer no HTML inteiro aqui.
-    # Mexer no HTML completo pode quebrar CSS, caixas de mensagem, itálico,
-    # classes e alinhamentos do EPUB.
-    # A limpeza já foi feita em cada texto antes do replace.
-    return str(soup), alterados, erros
+    html_final = str(soup)
+    html_final = html_lib.unescape(html_final)
+    html_final = substituir_sites_por_marca(html_final)
+
+    html_final = re.sub(r"([a-záàâãéêíóôõúç])(<[^/][^>]*>)([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2\3", html_final)
+    html_final = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", html_final)
+    html_final = re.sub(r"([.!?])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2", html_final)
+
+    html_final = html_final.replace("deTODOS", "de TODOS")
+    html_final = html_final.replace("TODOS.Cada", "TODOS. Cada")
+    html_final = html_final.replace("completaincluindo", "completa incluindo")
+    html_final = html_final.replace("paraaNo", "para a No")
+    html_final = html_final.replace("passaEm", "passa em")
+    html_final = html_final.replace("eununcadeixarei", "eu nunca deixarei")
+
+    return html_final, alterados, erros
 
 
 def criar_pagina_marca():
