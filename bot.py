@@ -285,11 +285,9 @@ def google_new_translate(texto):
         "query.target_language": "pt",
         "query.display_language": "pt-BR",
         "data_types": "TRANSLATION",
+        "key": "AIzaSyDLEeFI5OtFBwYBIoK_jj5m32rZK5CkCXA",
         "query.text": texto,
     }
-    if GOOGLE_NEW_KEY:
-        data["key"] = GOOGLE_NEW_KEY
-
     resposta = request_url(url, data=data, headers=headers, method="GET")
     return json.loads(resposta)["translation"]
 
@@ -300,11 +298,9 @@ def google_html_translate(texto):
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Content-Type": "application/json+protobuf",
+        "X-Goog-Api-Key": "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/133.0.0.0 Safari/537.36",
     }
-    if GOOGLE_HTML_KEY:
-        headers["X-Goog-Api-Key"] = GOOGLE_HTML_KEY
-
     body = json.dumps([[[texto], "en", "pt"], "wt_lib"])
     resposta = request_url(url, data=body, headers=headers, method="POST")
     return json.loads(resposta)[0][0]
@@ -606,40 +602,6 @@ async def traduzir_blocos(blocos, mecanismo, workers):
     return resultados
 
 
-
-def corrigir_no_texto_html(texto):
-    """Limpa somente texto visível, sem mexer nas tags/estilos do EPUB."""
-    if not texto:
-        return texto
-
-    inicio = re.match(r"^\s*", texto).group(0)
-    fim = re.search(r"\s*$", texto).group(0)
-    meio = texto.strip()
-
-    if not meio:
-        return texto
-
-    meio = revisar_texto_final(meio)
-    return inicio + meio + fim
-
-
-def finalizar_html_preservando_estilo(html):
-    """Correções finais sem destruir CSS, classes, spans, itálicos ou balões de mensagem."""
-    soup = BeautifulSoup(html, "html.parser")
-
-    for node in soup.find_all(string=True):
-        if not texto_visivel(node):
-            continue
-
-        original = str(node)
-        novo = corrigir_no_texto_html(original)
-
-        if novo != original:
-            node.replace_with(NavigableString(novo))
-
-    return str(soup)
-
-
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
     soup = BeautifulSoup(html, "html.parser")
     capitulo = contexto_capitulo(soup, arquivo_nome)
@@ -690,6 +652,10 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
+
+                # IMPORTANTE:
+                # troca somente o texto interno do EPUB,
+                # sem apagar a tag, classe, span, itálico ou estilo original.
                 node.replace_with(NavigableString(texto_final))
 
                 if texto_final.strip() != original.strip():
@@ -702,11 +668,11 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
-    # Importante: não aplicar regex no HTML inteiro.
-    # Isso preserva classes, CSS, spans, itálico, negrito e balões/mensagens do EPUB.
-    html_final = finalizar_html_preservando_estilo(str(soup))
-
-    return html_final, alterados, erros
+    # NÃO mexer no HTML inteiro aqui.
+    # Mexer no HTML completo pode quebrar CSS, caixas de mensagem, itálico,
+    # classes e alinhamentos do EPUB.
+    # A limpeza já foi feita em cada texto antes do replace.
+    return str(soup), alterados, erros
 
 
 def criar_pagina_marca():
@@ -1114,9 +1080,6 @@ async def erro_global(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN não configurado. Coloque BOT_TOKEN nas variáveis do Railway.")
-
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
