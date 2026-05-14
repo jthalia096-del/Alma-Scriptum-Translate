@@ -601,7 +601,6 @@ async def traduzir_blocos(blocos, mecanismo, workers):
 
     return resultados
 
-
 async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
     soup = BeautifulSoup(html, "html.parser")
     capitulo = contexto_capitulo(soup, arquivo_nome)
@@ -635,13 +634,16 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
 
     for bloco_id, partes_traduzidas, erros_bloco in resultados:
 
-    if user_id in cancelamentos:
-        raise Exception("Tradução cancelada.")
+        if user_id in cancelamentos:
+            raise Exception("Tradução cancelada.")
 
-    bloco = mapa_blocos.get(bloco_id, [])
+        bloco = mapa_blocos.get(bloco_id, [])
 
-    if len(partes_traduzidas) != len(bloco):
-        primeiro_texto = texto_curto(bloco[0][2] if bloco else "Trecho não identificado")
+        if len(partes_traduzidas) != len(bloco):
+            primeiro_texto = texto_curto(
+                bloco[0][2] if bloco else "Trecho não identificado"
+            )
+
             erros.append({
                 "capitulo": capitulo,
                 "bloco": bloco_id,
@@ -667,6 +669,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
 
             erro["capitulo"] = capitulo
             erros.append(erro)
+
 
     html_final = str(soup)
     html_final = html_lib.unescape(html_final)
