@@ -7,6 +7,7 @@ import asyncio
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from bs4 import NavigableString
 from concurrent.futures import ThreadPoolExecutor
 
 from bs4 import BeautifulSoup, NavigableString
@@ -650,7 +651,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
-                node.replace_with(texto_final)
+                node.replace_with(NavigableString(texto_final))
 
                 if texto_final.strip() != original.strip():
                     alterados += 1
