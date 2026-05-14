@@ -641,7 +641,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
     bloco = mapa_blocos.get(bloco_id, [])
 
     if len(partes_traduzidas) != len(bloco):
-            primeiro_texto = texto_curto(bloco[0][2] if bloco else "Trecho não identificado")
+        primeiro_texto = texto_curto(bloco[0][2] if bloco else "Trecho não identificado")
             erros.append({
                 "capitulo": capitulo,
                 "bloco": bloco_id,
