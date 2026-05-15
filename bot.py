@@ -968,7 +968,7 @@ for item in book.get_items_of_type(ITEM_DOCUMENT):
 
     epub.write_epub(str(saida), book)
 
-        return erros
+    return erros
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
