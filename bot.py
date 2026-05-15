@@ -40,7 +40,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 2500
+MERGE_LENGTH = 1200
 REQUEST_ATTEMPTS = 1
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
@@ -564,21 +564,29 @@ def montar_blocos(nos):
 
     for item in nos:
         _, _, texto = item
-        extra = len(texto) + 30
 
-        if bloco and tamanho + extra > MERGE_LENGTH:
+        texto = texto.strip() + "\n"
+
+        extra = len(texto) + 15
+
+        if (
+            bloco
+            and (
+                tamanho + extra > MERGE_LENGTH
+                or texto.endswith(("?", "!", ".", "—", "”", "\""))
+            )
+        ):
             blocos.append(bloco)
             bloco = []
             tamanho = 0
 
-        bloco.append(item)
+        bloco.append((item[0], item[1], texto))
         tamanho += extra
 
     if bloco:
         blocos.append(bloco)
 
     return blocos
-
 
 async def traduzir_blocos(blocos, mecanismo, workers):
     loop = asyncio.get_running_loop()
