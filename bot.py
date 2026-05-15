@@ -688,6 +688,20 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
 
     return html_final, alterados, erros
 
+for item in book.get_items_of_type(ITEM_DOCUMENT):
+    try:
+        html = item.get_content().decode("utf-8", errors="ignore")
+        soup = BeautifulSoup(html, "html.parser")
+
+        for tag in soup.find_all(True):
+            classes = tag.get("class")
+            if classes:
+                print("CLASSE ENCONTRADA:", classes)
+
+    except Exception:
+        pass
+        
+
 def aplicar_css_calibre_like(book):
     css = """
     body {
