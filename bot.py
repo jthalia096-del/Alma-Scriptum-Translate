@@ -733,25 +733,6 @@ def aplicar_css_calibre_like(book):
     }
     """
 
-    for item in book.get_items_of_type(ITEM_DOCUMENT):
-        try:
-            html = item.get_content().decode("utf-8", errors="ignore")
-            soup = BeautifulSoup(html, "html.parser")
-
-            if soup.head:
-                style_tag = soup.new_tag("style")
-                style_tag.string = css
-                soup.head.append(style_tag)
-            else:
-                style_tag = soup.new_tag("style")
-                style_tag.string = css
-                soup.insert(0, style_tag)
-
-            item.set_content(str(soup).encode("utf-8"))
-
-        except Exception:
-            pass
-
 
 def criar_pagina_marca():
     pagina = epub.EpubHtml(
