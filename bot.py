@@ -40,13 +40,13 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 1800
-REQUEST_ATTEMPTS = 2
-REQUEST_TIMEOUT = 20
-REQUEST_INTERVAL = 0.01
+MERGE_LENGTH = 2500
+REQUEST_ATTEMPTS = 1
+REQUEST_TIMEOUT = 15
+REQUEST_INTERVAL = 0.005
 
 CONFIGS = {
-    "google_new": {"nome": "🌐 Google Free New", "workers": 8},
+    "google_new": {"nome": "🌐 Google Free New", "workers": 10},
     "google_html": {"nome": "📄 Google Free HTML", "workers": 6},
     "google_old": {"nome": "🕰️ Google Free Old", "workers": 4},
 }
