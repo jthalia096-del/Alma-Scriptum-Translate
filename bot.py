@@ -943,19 +943,23 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
+        
 
-    for item in book.get_items_of_type(ITEM_DOCUMENT):
+for item in book.get_items_of_type(ITEM_DOCUMENT):
+
     try:
         html = item.get_content().decode("utf-8", errors="ignore")
         soup = BeautifulSoup(html, "html.parser")
 
         for tag in soup.find_all(True):
             classes = tag.get("class")
+
             if classes:
                 print("CLASSE ENCONTRADA:", classes)
 
     except Exception:
         pass
+        
 
     aplicar_css_calibre_like(book)
     
