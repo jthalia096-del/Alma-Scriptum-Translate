@@ -688,6 +688,72 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
 
     return html_final, alterados, erros
 
+def aplicar_css_calibre_like(book):
+    css = """
+    body {
+        margin: 0 6% !important;
+        padding: 0 !important;
+        line-height: 1.35 !important;
+        text-align: left;
+    }
+
+    h1, h2, h3, h4, .chapter, .chapter-title, .title {
+        text-align: center !important;
+        margin-top: 18% !important;
+        margin-bottom: 1.5em !important;
+        font-weight: bold !important;
+    }
+
+    h1 + p, h2 + p, h3 + p {
+        text-align: center !important;
+        font-style: italic !important;
+        font-weight: bold !important;
+    }
+
+    p {
+        margin-top: 0.75em !important;
+        margin-bottom: 0.75em !important;
+    }
+
+    i, em {
+        font-style: italic !important;
+    }
+
+    .sms, .text, .message, .chat, .bubble,
+    [class*="sms"], [class*="text"], [class*="message"],
+    [class*="chat"], [class*="bubble"] {
+        display: block !important;
+        width: fit-content !important;
+        max-width: 80% !important;
+        margin: 0.35em auto 0.35em 8% !important;
+        padding: 0.35em 0.75em !important;
+        border-radius: 1em !important;
+        background: #e8e8e8 !important;
+        color: #111 !important;
+        text-align: left !important;
+        font-style: normal !important;
+    }
+    """
+
+    style_item = epub.EpubItem(
+        uid="alma_scriptum_style",
+        file_name="styles/alma_scriptum_style.css",
+        media_type="text/css",
+        content=css.encode("utf-8"),
+    )
+
+    book.add_item(style_item)
+
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        try:
+            item.add_link(
+                href="styles/alma_scriptum_style.css",
+                rel="stylesheet",
+                type="text/css"
+            )
+        except Exception:
+            pass
+
 
 def criar_pagina_marca():
     pagina = epub.EpubHtml(
@@ -880,6 +946,8 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
 
+    aplicar_css_calibre_like(book)
+    
     if adicionar_marca:
         adicionar_pagina_marca(book)
 
