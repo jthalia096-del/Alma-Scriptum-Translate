@@ -691,17 +691,15 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
 def aplicar_css_calibre_like(book):
     css = """
     body {
-        margin: 0 6% !important;
-        padding: 0 !important;
+        margin-left: 6% !important;
+        margin-right: 6% !important;
         line-height: 1.35 !important;
-        text-align: left;
     }
 
-    h1, h2, h3, h4, .chapter, .chapter-title, .title {
+    h1, h2, h3, h4 {
         text-align: center !important;
         margin-top: 18% !important;
         margin-bottom: 1.5em !important;
-        font-weight: bold !important;
     }
 
     h1 + p, h2 + p, h3 + p {
@@ -719,12 +717,11 @@ def aplicar_css_calibre_like(book):
         font-style: italic !important;
     }
 
-    .sms, .text, .message, .chat, .bubble,
     [class*="sms"], [class*="text"], [class*="message"],
-    [class*="chat"], [class*="bubble"] {
+    [class*="chat"], [class*="bubble"], [class*="phone"] {
         display: block !important;
-        width: fit-content !important;
         max-width: 80% !important;
+        width: fit-content !important;
         margin: 0.35em auto 0.35em 8% !important;
         padding: 0.35em 0.75em !important;
         border-radius: 1em !important;
@@ -735,22 +732,22 @@ def aplicar_css_calibre_like(book):
     }
     """
 
-    style_item = epub.EpubItem(
-        uid="alma_scriptum_style",
-        file_name="styles/alma_scriptum_style.css",
-        media_type="text/css",
-        content=css.encode("utf-8"),
-    )
-
-    book.add_item(style_item)
-
     for item in book.get_items_of_type(ITEM_DOCUMENT):
         try:
-            item.add_link(
-                href="styles/alma_scriptum_style.css",
-                rel="stylesheet",
-                type="text/css"
-            )
+            html = item.get_content().decode("utf-8", errors="ignore")
+            soup = BeautifulSoup(html, "html.parser")
+
+            if soup.head:
+                style_tag = soup.new_tag("style")
+                style_tag.string = css
+                soup.head.append(style_tag)
+            else:
+                style_tag = soup.new_tag("style")
+                style_tag.string = css
+                soup.insert(0, style_tag)
+
+            item.set_content(str(soup).encode("utf-8"))
+
         except Exception:
             pass
 
