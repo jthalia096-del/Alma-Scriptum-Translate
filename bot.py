@@ -555,7 +555,7 @@ def contexto_capitulo(soup, arquivo_nome=""):
         return texto_curto(nome_limpo, 120)
 
     return "Capítulo não identificado"
-
+    
 
 def montar_blocos(nos):
     blocos = []
@@ -564,29 +564,21 @@ def montar_blocos(nos):
 
     for item in nos:
         _, _, texto = item
+        extra = len(texto) + 30
 
-        texto = texto.strip() + "\n"
-
-        extra = len(texto) + 15
-
-        if (
-            bloco
-            and (
-                tamanho + extra > MERGE_LENGTH
-                or texto.endswith(("?", "!", ".", "—", "”", "\""))
-            )
-        ):
+        if bloco and tamanho + extra > MERGE_LENGTH:
             blocos.append(bloco)
             bloco = []
             tamanho = 0
 
-        bloco.append((item[0], item[1], texto))
+        bloco.append(item)
         tamanho += extra
 
     if bloco:
         blocos.append(bloco)
 
     return blocos
+
 
 async def traduzir_blocos(blocos, mecanismo, workers):
     loop = asyncio.get_running_loop()
