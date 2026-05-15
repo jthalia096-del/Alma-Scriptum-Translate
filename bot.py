@@ -7,8 +7,8 @@ import html as html_lib
 import asyncio
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from bs4 import NavigableString
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from bs4 import BeautifulSoup, NavigableString
@@ -29,6 +29,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 IDS_LIBERADOS = {
     8672397104,
+    1130170420,
 }
 
 BASE_DIR = Path(__file__).parent
@@ -40,7 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 1200
+MERGE_LENGTH = 1800
 REQUEST_ATTEMPTS = 1
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
@@ -555,7 +556,7 @@ def contexto_capitulo(soup, arquivo_nome=""):
         return texto_curto(nome_limpo, 120)
 
     return "Capítulo não identificado"
-    
+
 
 def montar_blocos(nos):
     blocos = []
@@ -601,7 +602,8 @@ async def traduzir_blocos(blocos, mecanismo, workers):
 
     return resultados
 
-async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
+
+async def traduzir_html(html, mecanismo, arquivo_nome=""):
     soup = BeautifulSoup(html, "html.parser")
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
@@ -633,17 +635,10 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
     alterados = 0
 
     for bloco_id, partes_traduzidas, erros_bloco in resultados:
-
-        if user_id in cancelamentos:
-            raise Exception("Tradução cancelada.")
-
         bloco = mapa_blocos.get(bloco_id, [])
 
         if len(partes_traduzidas) != len(bloco):
-            primeiro_texto = texto_curto(
-                bloco[0][2] if bloco else "Trecho não identificado"
-            )
-
+            primeiro_texto = texto_curto(bloco[0][2] if bloco else "Trecho não identificado")
             erros.append({
                 "capitulo": capitulo,
                 "bloco": bloco_id,
@@ -670,7 +665,6 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
-
     html_final = str(soup)
     html_final = html_lib.unescape(html_final)
     html_final = substituir_sites_por_marca(html_final)
@@ -687,51 +681,6 @@ async def traduzir_html(html, mecanismo, arquivo_nome="", user_id=None):
     html_final = html_final.replace("eununcadeixarei", "eu nunca deixarei")
 
     return html_final, alterados, erros
-        
-
-def aplicar_css_calibre_like(book):
-    css = """
-    body {
-        margin-left: 6% !important;
-        margin-right: 6% !important;
-        line-height: 1.35 !important;
-    }
-
-    h1, h2, h3, h4 {
-        text-align: center !important;
-        margin-top: 18% !important;
-        margin-bottom: 1.5em !important;
-    }
-
-    h1 + p, h2 + p, h3 + p {
-        text-align: center !important;
-        font-style: italic !important;
-        font-weight: bold !important;
-    }
-
-    p {
-        margin-top: 0.75em !important;
-        margin-bottom: 0.75em !important;
-    }
-
-    i, em {
-        font-style: italic !important;
-    }
-
-    [class*="sms"], [class*="text"], [class*="message"],
-    [class*="chat"], [class*="bubble"], [class*="phone"] {
-        display: block !important;
-        max-width: 80% !important;
-        width: fit-content !important;
-        margin: 0.35em auto 0.35em 8% !important;
-        padding: 0.35em 0.75em !important;
-        border-radius: 1em !important;
-        background: #e8e8e8 !important;
-        color: #111 !important;
-        text-align: left !important;
-        font-style: normal !important;
-    }
-    """
 
 
 def criar_pagina_marca():
@@ -890,11 +839,10 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
             arquivo_nome = getattr(item, "file_name", f"arquivo_{i}")
             traduzido, alterados, erros_html = await traduzir_html(
-              conteudo,
-              mecanismo,
-              arquivo_nome,
-              user_id,
-         )
+                conteudo,
+                mecanismo,
+                arquivo_nome,
+            )
 
             for erro in erros_html:
                 erro["arquivo"] = f"{i}/{total}"
@@ -924,32 +872,14 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
-        
-
-for item in book.get_items_of_type(ITEM_DOCUMENT):
-
-    try:
-        html = item.get_content().decode("utf-8", errors="ignore")
-        soup = BeautifulSoup(html, "html.parser")
-
-        for tag in soup.find_all(True):
-            classes = tag.get("class")
-
-            if classes:
-                print("CLASSE ENCONTRADA:", classes)
-
-    except Exception:
-        pass
-        
-
-    aplicar_css_calibre_like(book)
 
     if adicionar_marca:
         adicionar_pagina_marca(book)
 
     epub.write_epub(str(saida), book)
 
-    return erros 
+    return erros
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
