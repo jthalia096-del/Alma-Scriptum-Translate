@@ -962,7 +962,7 @@ for item in book.get_items_of_type(ITEM_DOCUMENT):
         
 
     aplicar_css_calibre_like(book)
-    
+
     if adicionar_marca:
         adicionar_pagina_marca(book)
 
