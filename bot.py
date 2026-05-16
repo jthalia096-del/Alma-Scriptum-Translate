@@ -747,6 +747,100 @@ def aplicar_css_calibre_like(book):
         except Exception:
             pass
 
+def aplicar_estetica_celular_e_capitulo(book):
+    css = """
+    body {
+        margin-left: 5% !important;
+        margin-right: 5% !important;
+        line-height: 1.35 !important;
+    }
+
+    h1, h2, h3, h4 {
+        text-align: center !important;
+        margin-top: 12% !important;
+        margin-bottom: 1em !important;
+    }
+
+    .alma-capitulo {
+        text-align: center !important;
+        font-weight: bold !important;
+        margin-top: 12% !important;
+        margin-bottom: 0.4em !important;
+        border-bottom: 1px solid #aaa !important;
+        width: fit-content !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        padding-bottom: 0.25em !important;
+    }
+
+    .alma-nome-capitulo {
+        text-align: center !important;
+        font-style: italic !important;
+        font-weight: bold !important;
+        font-size: 1.25em !important;
+        margin-bottom: 4em !important;
+    }
+
+    .alma-sms {
+        display: block !important;
+        width: fit-content !important;
+        max-width: 78% !important;
+        background: #eeeeee !important;
+        color: #222 !important;
+        border-radius: 999px !important;
+        padding: 0.28em 0.75em !important;
+        margin: 0.25em 0 0.25em 7% !important;
+        text-align: left !important;
+        font-style: normal !important;
+        font-size: 0.92em !important;
+        line-height: 1.15 !important;
+    }
+    """
+
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        try:
+            html = item.get_content().decode("utf-8", errors="ignore")
+            soup = BeautifulSoup(html, "html.parser")
+
+            style_tag = soup.new_tag("style")
+            style_tag.string = css
+
+            if soup.head:
+                soup.head.append(style_tag)
+            else:
+                soup.insert(0, style_tag)
+
+            textos = soup.find_all(["p", "div", "h1", "h2", "h3"])
+
+            for i, tag in enumerate(textos):
+                txt = tag.get_text(" ", strip=True)
+
+                if re.search(r"cap[ií]tulo\s+\d+|pr[oó]logo|ep[ií]logo", txt, re.I):
+                    tag["class"] = tag.get("class", []) + ["alma-capitulo"]
+
+                    if i + 1 < len(textos):
+                        prox = textos[i + 1]
+                        prox_txt = prox.get_text(" ", strip=True)
+                        if prox_txt and len(prox_txt) <= 40:
+                            prox["class"] = prox.get("class", []) + ["alma-nome-capitulo"]
+
+                if 2 <= len(txt) <= 95:
+                    antes = textos[i - 1].get_text(" ", strip=True) if i > 0 else ""
+                    depois = textos[i + 1].get_text(" ", strip=True) if i + 1 < len(textos) else ""
+
+                    if (
+                        len(antes) <= 95
+                        and len(depois) <= 120
+                        and not re.search(r"cap[ií]tulo|pr[oó]logo|ep[ií]logo", txt, re.I)
+                    ):
+                        tag["class"] = tag.get("class", []) + ["alma-sms"]
+
+            item.set_content(str(soup).encode("utf-8"))
+
+        except Exception:
+            pass
+            
+
 def criar_pagina_marca():
     pagina = epub.EpubHtml(
         title="Alma Scriptum",
@@ -938,6 +1032,8 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
 
     aplicar_css_calibre_like(book)
+
+    aplicar_estetica_celular_e_capitulo(book)
 
     if adicionar_marca:
         adicionar_pagina_marca(book)
