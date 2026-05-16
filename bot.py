@@ -7,7 +7,6 @@ import html as html_lib
 import asyncio
 import urllib.parse
 import urllib.request
-from bs4 import NavigableString
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -665,23 +664,88 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
+    # Não limpa o HTML inteiro aqui.
+    # A limpeza global quebrava estética, CSS, alinhamento e podia grudar palavras.
     html_final = str(soup)
-    html_final = html_lib.unescape(html_final)
-    html_final = substituir_sites_por_marca(html_final)
-
-    html_final = re.sub(r"([a-záàâãéêíóôõúç])(<[^/][^>]*>)([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2\3", html_final)
-    html_final = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", html_final)
-    html_final = re.sub(r"([.!?])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2", html_final)
-
-    html_final = html_final.replace("deTODOS", "de TODOS")
-    html_final = html_final.replace("TODOS.Cada", "TODOS. Cada")
-    html_final = html_final.replace("completaincluindo", "completa incluindo")
-    html_final = html_final.replace("paraaNo", "para a No")
-    html_final = html_final.replace("passaEm", "passa em")
-    html_final = html_final.replace("eununcadeixarei", "eu nunca deixarei")
-
     return html_final, alterados, erros
 
+
+
+def aplicar_css_calibre_like(book):
+    """
+    Ajuste visual leve para aproximar o EPUB do resultado do Calibre,
+    sem mexer na tradução e sem apagar estilos originais.
+    """
+    css = """
+    html, body {
+        margin-left: 5% !important;
+        margin-right: 5% !important;
+        padding: 0 !important;
+        line-height: 1.35 !important;
+    }
+
+    h1, h2, h3, h4 {
+        text-align: center !important;
+        margin-top: 10% !important;
+        margin-bottom: 1.2em !important;
+        font-weight: bold !important;
+    }
+
+    h1 + p, h2 + p, h3 + p,
+    .subtitle, .sub-title, .author, .byline {
+        text-align: center !important;
+    }
+
+    p {
+        margin-top: 0.55em !important;
+        margin-bottom: 0.55em !important;
+    }
+
+    i, em {
+        font-style: italic !important;
+    }
+
+    blockquote, .quote, .epigraph, .dedication {
+        font-style: italic !important;
+        margin-left: 7% !important;
+        margin-right: 7% !important;
+    }
+
+    /* Possíveis mensagens de celular. Só aplica se o EPUB tiver classes com esses nomes. */
+    [class*="sms"], [class*="text"], [class*="message"],
+    [class*="chat"], [class*="bubble"], [class*="phone"],
+    [class*="msg"], [class*="imessage"] {
+        display: block !important;
+        width: fit-content !important;
+        max-width: 82% !important;
+        margin-top: 0.25em !important;
+        margin-bottom: 0.25em !important;
+        padding: 0.28em 0.7em !important;
+        border-radius: 0.9em !important;
+        background: #eeeeee !important;
+        color: #111111 !important;
+        text-align: left !important;
+        font-style: normal !important;
+    }
+    """
+
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        try:
+            html = item.get_content().decode("utf-8", errors="ignore")
+            soup = BeautifulSoup(html, "html.parser")
+
+            style_tag = soup.new_tag("style")
+            style_tag.string = css
+
+            if soup.head:
+                soup.head.append(style_tag)
+            else:
+                soup.insert(0, style_tag)
+
+            item.set_content(str(soup).encode("utf-8"))
+
+        except Exception:
+            pass
 
 def criar_pagina_marca():
     pagina = epub.EpubHtml(
@@ -872,6 +936,8 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
+
+    aplicar_css_calibre_like(book)
 
     if adicionar_marca:
         adicionar_pagina_marca(book)
