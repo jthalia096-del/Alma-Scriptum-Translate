@@ -1031,10 +1031,8 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
 
-    aplicar_css_calibre_like(book)
-
-    aplicar_estetica_celular_e_capitulo(book)
-
+    # Mantém a estética original do EPUB.
+    # Não aplicamos CSS forçado aqui, para ficar o mais parecido possível com o original/Calibre.
     if adicionar_marca:
         adicionar_pagina_marca(book)
 
