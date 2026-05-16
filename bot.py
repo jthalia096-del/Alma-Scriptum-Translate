@@ -176,6 +176,31 @@ def revisar_texto_final(texto):
 
     texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2", texto)
 
+    correcoes_grudadas = {
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
+        "quememória": "que memória",
+        "quememoria": "que memória",
+        "caralhoquememória": "caralho, que memória",
+        "caralhoquememoria": "caralho, que memória",
+        "monitorese": "monitores e",
+        "perguntase": "pergunta se",
+        "resolvê-loAgora": "resolvê-lo. Agora",
+        "resolveloAgora": "resolvê-lo. Agora",
+        "seunúmero": "seu número",
+        "minhatristeza": "minha tristeza",
+        "ignorá-lasMAS": "ignorá-las. MAS",
+        "bemEspero": "bem? Espero",
+        "bem?Espero": "bem? Espero",
+        "físicasem": "física. Sem",
+        "físicaSem": "física. Sem",
+        "semviolência": "sem violência",
+        "ok,tudo": "Ok, tudo",
+    }
+
+    for errado, certo in correcoes_grudadas.items():
+        texto = texto.replace(errado, certo)
+
     correcoes = {
         "deTODOS": "de TODOS",
         "de TODOS.Cada": "de TODOS. Cada",
@@ -653,7 +678,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
-                node.replace_with(texto_final)
+                node.replace_with(NavigableString(texto_final))
 
                 if texto_final.strip() != original.strip():
                     alterados += 1
@@ -977,15 +1002,115 @@ def salvar_log(nome_base, erros):
     return caminho
 
 
+
+def _normalizar_zip_path(caminho):
+    return str(caminho).replace("\\", "/").lstrip("/")
+
+
+def _encontrar_opf_no_epub(arquivos):
+    container_path = "META-INF/container.xml"
+
+    if container_path not in arquivos:
+        return None
+
+    try:
+        soup = BeautifulSoup(arquivos[container_path].decode("utf-8", errors="ignore"), "xml")
+        rootfile = soup.find("rootfile")
+        if rootfile and rootfile.get("full-path"):
+            return _normalizar_zip_path(rootfile.get("full-path"))
+    except Exception:
+        return None
+
+    return None
+
+
+def adicionar_pagina_marca_zip(arquivos):
+    """
+    Adiciona a página/logo Alma Scriptum sem usar epub.write_epub.
+    Assim o EPUB original continua preservado, mas a logo volta a entrar.
+    """
+    if not MARCA_IMAGEM.exists():
+        return arquivos
+
+    opf_path = _encontrar_opf_no_epub(arquivos)
+
+    if not opf_path or opf_path not in arquivos:
+        return arquivos
+
+    try:
+        opf_dir = str(Path(opf_path).parent).replace("\\", "/")
+        if opf_dir == ".":
+            opf_dir = ""
+
+        pagina_rel = "alma_scriptum.xhtml"
+        imagem_rel = "images/alma_scriptum.png"
+
+        pagina_path = _normalizar_zip_path(f"{opf_dir}/{pagina_rel}" if opf_dir else pagina_rel)
+        imagem_path = _normalizar_zip_path(f"{opf_dir}/{imagem_rel}" if opf_dir else imagem_rel)
+
+        pagina_html = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            '<head><title>Alma Scriptum</title></head>\n'
+            '<body style="margin:0; padding:0; background:#ffffff;">\n'
+            '<div style="text-align:center; margin:0; padding:0;">\n'
+            f'<img src="{imagem_rel}" alt="Alma Scriptum" '
+            'style="width:100%; max-width:900px; display:block; margin:0 auto;" />\n'
+            '</div>\n'
+            '</body>\n'
+            '</html>\n'
+        )
+
+        soup = BeautifulSoup(arquivos[opf_path].decode("utf-8", errors="ignore"), "xml")
+        manifest = soup.find("manifest")
+        spine = soup.find("spine")
+
+        if manifest:
+            for old in manifest.find_all("item"):
+                if old.get("id") in ["alma_scriptum_page", "alma_scriptum_img"]:
+                    old.decompose()
+
+            item_img = soup.new_tag("item")
+            item_img["id"] = "alma_scriptum_img"
+            item_img["href"] = imagem_rel
+            item_img["media-type"] = "image/png"
+            manifest.append(item_img)
+
+            item_page = soup.new_tag("item")
+            item_page["id"] = "alma_scriptum_page"
+            item_page["href"] = pagina_rel
+            item_page["media-type"] = "application/xhtml+xml"
+            manifest.append(item_page)
+
+        if spine:
+            for old in spine.find_all("itemref"):
+                if old.get("idref") == "alma_scriptum_page":
+                    old.decompose()
+
+            itemref = soup.new_tag("itemref")
+            itemref["idref"] = "alma_scriptum_page"
+
+            refs = spine.find_all("itemref")
+            if refs:
+                refs[0].insert_after(itemref)
+            else:
+                spine.append(itemref)
+
+        arquivos[opf_path] = str(soup).encode("utf-8")
+        arquivos[pagina_path] = pagina_html.encode("utf-8")
+        arquivos[imagem_path] = MARCA_IMAGEM.read_bytes()
+
+    except Exception as erro:
+        print(f"⚠️ Não consegui adicionar a marca no EPUB preservado: {erro}")
+
+    return arquivos
+
+
 async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True):
     """
     MODO PRESERVAR ORIGINAL:
-    Não usa epub.write_epub para salvar o livro inteiro, porque isso reescreve o EPUB
-    e pode apagar <head>, links CSS, classes e estética original.
-
-    Aqui o bot copia o EPUB original e troca somente o conteúdo dos arquivos HTML/XHTML.
-    Assim as bolhas de celular, centralização, CSS e estrutura ficam muito mais parecidos
-    com o Calibre/original.
+    Copia o EPUB original e troca apenas o conteúdo dos arquivos HTML/XHTML.
+    Também recoloca a página/logo Alma Scriptum sem destruir CSS original.
     """
     erros = []
     traduzidos = 0
@@ -993,64 +1118,69 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
     extensoes_html = (".xhtml", ".html", ".htm")
 
     with zipfile.ZipFile(str(entrada), "r") as zip_in:
-        nomes = zip_in.namelist()
+        nomes_originais = zip_in.namelist()
+        arquivos = {nome: zip_in.read(nome) for nome in nomes_originais}
 
-        documentos = [
-            nome for nome in nomes
-            if nome.lower().endswith(extensoes_html)
-            and not nome.lower().endswith("nav.xhtml")
-        ]
+    documentos = [
+        nome for nome in nomes_originais
+        if nome.lower().endswith(extensoes_html)
+        and not nome.lower().endswith("nav.xhtml")
+    ]
 
-        total = len(documentos) or 1
+    total = len(documentos) or 1
 
-        with zipfile.ZipFile(str(saida), "w", compression=zipfile.ZIP_DEFLATED) as zip_out:
-            for nome in nomes:
-                dados = zip_in.read(nome)
+    for i, nome in enumerate(documentos, start=1):
+        if user_id in cancelamentos:
+            raise Exception("Tradução cancelada.")
 
-                if nome in documentos:
-                    i = documentos.index(nome) + 1
+        try:
+            conteudo = arquivos[nome].decode("utf-8", errors="ignore")
 
-                    if user_id in cancelamentos:
-                        raise Exception("Tradução cancelada.")
+            if conteudo.strip():
+                traduzido, alterados, erros_html = await traduzir_html(
+                    conteudo,
+                    mecanismo,
+                    nome,
+                )
 
-                    try:
-                        conteudo = dados.decode("utf-8", errors="ignore")
+                for erro in erros_html:
+                    erro["arquivo"] = f"{i}/{total}"
+                    erros.append(erro)
 
-                        if conteudo.strip():
-                            traduzido, alterados, erros_html = await traduzir_html(
-                                conteudo,
-                                mecanismo,
-                                nome,
-                            )
+                if alterados > 0:
+                    traduzidos += 1
+                    arquivos[nome] = traduzido.encode("utf-8")
 
-                            for erro in erros_html:
-                                erro["arquivo"] = f"{i}/{total}"
-                                erros.append(erro)
+                print(f"✅ Traduzido {i}/{total}: {nome}")
 
-                            if alterados > 0:
-                                traduzidos += 1
-                                dados = traduzido.encode("utf-8")
+        except Exception as erro:
+            erros.append({
+                "arquivo": f"{i}/{total}",
+                "capitulo": "Capítulo não identificado",
+                "bloco": "-",
+                "trecho_num": "-",
+                "motivo": str(erro)[:120],
+                "texto": "erro geral no arquivo interno",
+            })
+            print(f"⚠️ Arquivo interno {i}/{total}: {str(erro)[:120]}")
 
-                            print(f"✅ Traduzido {i}/{total}: {nome}")
-
-                    except Exception as erro:
-                        erros.append({
-                            "arquivo": f"{i}/{total}",
-                            "capitulo": "Capítulo não identificado",
-                            "bloco": "-",
-                            "trecho_num": "-",
-                            "motivo": str(erro)[:120],
-                            "texto": "erro geral no arquivo interno",
-                        })
-                        print(f"⚠️ Arquivo interno {i}/{total}: {str(erro)[:120]}")
-
-                    await atualizar_progresso(mensagem, mecanismo, i, total, erros)
-                    await asyncio.sleep(REQUEST_INTERVAL)
-
-                zip_out.writestr(nome, dados)
+        await atualizar_progresso(mensagem, mecanismo, i, total, erros)
+        await asyncio.sleep(REQUEST_INTERVAL)
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
+
+    if adicionar_marca:
+        arquivos = adicionar_pagina_marca_zip(arquivos)
+
+    nomes_finais = list(nomes_originais)
+    for nome in arquivos:
+        if nome not in nomes_finais:
+            nomes_finais.append(nome)
+
+    with zipfile.ZipFile(str(saida), "w", compression=zipfile.ZIP_DEFLATED) as zip_out:
+        for nome in nomes_finais:
+            zip_out.writestr(nome, arquivos[nome])
 
     return erros
 
