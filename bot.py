@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import json
+import zipfile
 import time
 import html as html_lib
 import asyncio
@@ -603,7 +604,7 @@ async def traduzir_blocos(blocos, mecanismo, workers):
 
 
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
-    soup = BeautifulSoup(html, "xml")
+    soup = BeautifulSoup(html, "html.parser")
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
     nos = []
@@ -732,7 +733,7 @@ def aplicar_css_calibre_like(book):
     for item in book.get_items_of_type(ITEM_DOCUMENT):
         try:
             html = item.get_content().decode("utf-8", errors="ignore")
-            soup = BeautifulSoup(html, "xml")
+            soup = BeautifulSoup(html, "html.parser")
 
             style_tag = soup.new_tag("style")
             style_tag.string = css
@@ -800,7 +801,7 @@ def aplicar_estetica_celular_e_capitulo(book):
     for item in book.get_items_of_type(ITEM_DOCUMENT):
         try:
             html = item.get_content().decode("utf-8", errors="ignore")
-            soup = BeautifulSoup(html, "xml")
+            soup = BeautifulSoup(html, "html.parser")
 
             style_tag = soup.new_tag("style")
             style_tag.string = css
@@ -977,64 +978,79 @@ def salvar_log(nome_base, erros):
 
 
 async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True):
-    book = epub.read_epub(str(entrada))
-    documentos = list(book.get_items_of_type(ITEM_DOCUMENT))
-    total = len(documentos)
+    """
+    MODO PRESERVAR ORIGINAL:
+    Não usa epub.write_epub para salvar o livro inteiro, porque isso reescreve o EPUB
+    e pode apagar <head>, links CSS, classes e estética original.
 
-    traduzidos = 0
+    Aqui o bot copia o EPUB original e troca somente o conteúdo dos arquivos HTML/XHTML.
+    Assim as bolhas de celular, centralização, CSS e estrutura ficam muito mais parecidos
+    com o Calibre/original.
+    """
     erros = []
+    traduzidos = 0
 
-    for i, item in enumerate(documentos, start=1):
-        if user_id in cancelamentos:
-            raise Exception("Tradução cancelada.")
+    extensoes_html = (".xhtml", ".html", ".htm")
 
-        try:
-            conteudo = item.get_content().decode("utf-8", errors="ignore")
+    with zipfile.ZipFile(str(entrada), "r") as zip_in:
+        nomes = zip_in.namelist()
 
-            if not conteudo.strip():
-                await atualizar_progresso(mensagem, mecanismo, i, total, erros)
-                continue
+        documentos = [
+            nome for nome in nomes
+            if nome.lower().endswith(extensoes_html)
+            and not nome.lower().endswith("nav.xhtml")
+        ]
 
-            arquivo_nome = getattr(item, "file_name", f"arquivo_{i}")
-            traduzido, alterados, erros_html = await traduzir_html(
-                conteudo,
-                mecanismo,
-                arquivo_nome,
-            )
+        total = len(documentos) or 1
 
-            for erro in erros_html:
-                erro["arquivo"] = f"{i}/{total}"
-                erros.append(erro)
+        with zipfile.ZipFile(str(saida), "w", compression=zipfile.ZIP_DEFLATED) as zip_out:
+            for nome in nomes:
+                dados = zip_in.read(nome)
 
-            if alterados > 0:
-                traduzidos += 1
+                if nome in documentos:
+                    i = documentos.index(nome) + 1
 
-            item.set_content(traduzido.encode("utf-8"))
+                    if user_id in cancelamentos:
+                        raise Exception("Tradução cancelada.")
 
-            print(f"✅ Traduzido {i}/{total}")
+                    try:
+                        conteudo = dados.decode("utf-8", errors="ignore")
 
-        except Exception as erro:
-            erro_txt = {
-                "arquivo": f"{i}/{total}",
-                "capitulo": "Capítulo não identificado",
-                "bloco": "-",
-                "trecho_num": "-",
-                "motivo": str(erro)[:120],
-                "texto": "erro geral no arquivo interno",
-            }
-            erros.append(erro_txt)
-            print(f"⚠️ Arquivo interno {i}/{total}: {str(erro)[:120]}")
+                        if conteudo.strip():
+                            traduzido, alterados, erros_html = await traduzir_html(
+                                conteudo,
+                                mecanismo,
+                                nome,
+                            )
 
-        await atualizar_progresso(mensagem, mecanismo, i, total, erros)
-        await asyncio.sleep(REQUEST_INTERVAL)
+                            for erro in erros_html:
+                                erro["arquivo"] = f"{i}/{total}"
+                                erros.append(erro)
+
+                            if alterados > 0:
+                                traduzidos += 1
+                                dados = traduzido.encode("utf-8")
+
+                            print(f"✅ Traduzido {i}/{total}: {nome}")
+
+                    except Exception as erro:
+                        erros.append({
+                            "arquivo": f"{i}/{total}",
+                            "capitulo": "Capítulo não identificado",
+                            "bloco": "-",
+                            "trecho_num": "-",
+                            "motivo": str(erro)[:120],
+                            "texto": "erro geral no arquivo interno",
+                        })
+                        print(f"⚠️ Arquivo interno {i}/{total}: {str(erro)[:120]}")
+
+                    await atualizar_progresso(mensagem, mecanismo, i, total, erros)
+                    await asyncio.sleep(REQUEST_INTERVAL)
+
+                zip_out.writestr(nome, dados)
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
-
-    if adicionar_marca:
-        adicionar_pagina_marca(book)
-
-    epub.write_epub(str(saida), book)
 
     return erros
 
