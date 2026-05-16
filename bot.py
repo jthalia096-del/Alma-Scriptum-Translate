@@ -174,41 +174,13 @@ def revisar_texto_final(texto):
     texto = texto.replace("&#39;", "'")
     texto = texto.replace("&amp;", "&")
 
-    texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2", texto)
-
-    correcoes_grudadas = {
-        "emesse": "em esse",
-        "nessequarto": "nesse quarto",
-        "quememória": "que memória",
-        "quememoria": "que memória",
-        "caralhoquememória": "caralho, que memória",
-        "caralhoquememoria": "caralho, que memória",
-        "monitorese": "monitores e",
-        "perguntase": "pergunta se",
-        "resolvê-loAgora": "resolvê-lo. Agora",
-        "resolveloAgora": "resolvê-lo. Agora",
-        "seunúmero": "seu número",
-        "minhatristeza": "minha tristeza",
-        "ignorá-lasMAS": "ignorá-las. MAS",
-        "bemEspero": "bem? Espero",
-        "bem?Espero": "bem? Espero",
-        "físicasem": "física. Sem",
-        "físicaSem": "física. Sem",
-        "semviolência": "sem violência",
-        "ok,tudo": "Ok, tudo",
-    }
-
-    for errado, certo in correcoes_grudadas.items():
-        texto = texto.replace(errado, certo)
-
     correcoes = {
         "deTODOS": "de TODOS",
         "de TODOS.Cada": "de TODOS. Cada",
         "TODOS.Cada": "TODOS. Cada",
-        "Cada persona": "Cada persona",
         "paraa": "para a",
-        "para aNo": "para a No",
-        "para aNa": "para a Na",
+        "paraaNo": "para a No",
+        "paraaNa": "para a Na",
         "passaEm": "passa em",
         "se passaEm": "se passa em",
         "completaincluindo": "completa incluindo",
@@ -223,21 +195,50 @@ def revisar_texto_final(texto):
         "naA": "na A",
         "emA": "em A",
         "deA": "de A",
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
+        "nesseambiente": "nesse ambiente",
+        "quememória": "que memória",
+        "quememoria": "que memória",
+        "caralhoquememória": "caralho, que memória",
+        "caralhoquememoria": "caralho, que memória",
+        "monitorese": "monitores e",
+        "perguntase": "pergunta se",
+        "resolvê-loAgora": "resolvê-lo. Agora",
+        "resolveloAgora": "resolvê-lo. Agora",
+        "seunúmero": "seu número",
+        "seunumero": "seu número",
+        "minhatristeza": "minha tristeza",
+        "ignorá-lasMAS": "ignorá-las. MAS",
+        "ignora-lasMAS": "ignorá-las. MAS",
+        "bemEspero": "bem? Espero",
+        "bem?Espero": "bem? Espero",
+        "físicasem": "física. Sem",
+        "fisicasem": "física. Sem",
+        "físicaSem": "física. Sem",
+        "semviolência": "sem violência",
+        "semviolencia": "sem violência",
+        "ok,tudo": "Ok, tudo",
+        "Ok,tudo": "Ok, tudo",
+        "eununcadeixarei": "eu nunca deixarei",
     }
 
     for errado, certo in correcoes.items():
         texto = texto.replace(errado, certo)
 
-    # Separações genéricas sem mexer em nomes próprios normais.
-    texto = re.sub(r"\b([a-záàâãéêíóôõúç]{3,})([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})\b", r"\1 \2", texto)
+    texto = re.sub(
+        r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
+        r"\1 \2",
+        texto
+    )
 
-    # Corrige palavras comuns que grudam em português depois da tradução.
     palavras_comuns = [
         "que", "quando", "porque", "mas", "então", "agora", "aqui", "ali",
-        "com", "sem", "para", "pela", "pelo", "num", "numa", "nesse", "nessa",
-        "naquele", "naquela", "minha", "meu", "sua", "seu", "todos", "todas",
-        "memória", "lembrança", "quarto", "casa", "telefone", "mensagem",
-        "pergunta", "resposta", "espero", "preciso", "violência", "física",
+        "com", "sem", "para", "pela", "pelo", "nesse", "nessa", "naquele",
+        "naquela", "minha", "meu", "sua", "seu", "todos", "todas", "memória",
+        "memoria", "lembrança", "quarto", "casa", "telefone", "mensagem",
+        "pergunta", "resposta", "espero", "preciso", "violência", "violencia",
+        "física", "fisica", "incluindo", "experiência", "experiencia",
     ]
 
     for palavra in palavras_comuns:
@@ -1045,13 +1046,7 @@ def _encontrar_opf_no_epub(arquivos):
     return None
 
 
-
 def atualizar_titulo_epub_zip(arquivos, titulo_final):
-    """
-    Renomeia o título interno do EPUB no arquivo OPF.
-    Isso ajuda leitores/Telegram/Calibre a mostrarem o nome Alma Scriptum,
-    não só o nome do arquivo enviado.
-    """
     opf_path = _encontrar_opf_no_epub(arquivos)
 
     if not opf_path or opf_path not in arquivos:
@@ -1059,7 +1054,6 @@ def atualizar_titulo_epub_zip(arquivos, titulo_final):
 
     try:
         soup = BeautifulSoup(arquivos[opf_path].decode("utf-8", errors="ignore"), "xml")
-
         titulo_limpo = Path(titulo_final).stem
 
         title_tag = soup.find("dc:title")
@@ -1075,16 +1069,12 @@ def atualizar_titulo_epub_zip(arquivos, titulo_final):
         arquivos[opf_path] = str(soup).encode("utf-8")
 
     except Exception as erro:
-        print(f"⚠️ Não consegui renomear o título interno do EPUB: {erro}")
+        print(f"⚠️ Não consegui renomear título interno: {erro}")
 
     return arquivos
 
 
 def adicionar_pagina_marca_zip(arquivos):
-    """
-    Adiciona a página/logo Alma Scriptum sem usar epub.write_epub.
-    Assim o EPUB original continua preservado, mas a logo volta a entrar.
-    """
     if not MARCA_IMAGEM.exists():
         return arquivos
 
@@ -1162,12 +1152,7 @@ def adicionar_pagina_marca_zip(arquivos):
     return arquivos
 
 
-async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True):
-    """
-    MODO PRESERVAR ORIGINAL:
-    Copia o EPUB original e troca apenas o conteúdo dos arquivos HTML/XHTML.
-    Também recoloca a página/logo Alma Scriptum sem destruir CSS original.
-    """
+async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True, nome_original=None):
     erros = []
     traduzidos = 0
 
@@ -1226,8 +1211,8 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
 
-    titulo_final = criar_nome_final(Path(entrada).name)
-
+    nome_base_para_titulo = nome_original or Path(entrada).name
+    titulo_final = criar_nome_final(nome_base_para_titulo)
     arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
 
     if adicionar_marca:
@@ -1367,6 +1352,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user_id,
             mensagem=mensagem,
             adicionar_marca=usuarios[user_id]["marca"],
+            nome_original=documento.file_name,
         )
 
         try:
