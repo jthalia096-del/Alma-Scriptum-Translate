@@ -603,7 +603,7 @@ async def traduzir_blocos(blocos, mecanismo, workers):
 
 
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "xml")
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
     nos = []
@@ -652,7 +652,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
-                node.replace_with(NavigableString(texto_final))
+                node.replace_with(texto_final)
 
                 if texto_final.strip() != original.strip():
                     alterados += 1
@@ -732,7 +732,7 @@ def aplicar_css_calibre_like(book):
     for item in book.get_items_of_type(ITEM_DOCUMENT):
         try:
             html = item.get_content().decode("utf-8", errors="ignore")
-            soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(html, "xml")
 
             style_tag = soup.new_tag("style")
             style_tag.string = css
@@ -800,7 +800,7 @@ def aplicar_estetica_celular_e_capitulo(book):
     for item in book.get_items_of_type(ITEM_DOCUMENT):
         try:
             html = item.get_content().decode("utf-8", errors="ignore")
-            soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(html, "xml")
 
             style_tag = soup.new_tag("style")
             style_tag.string = css
@@ -1031,8 +1031,6 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
 
-    # Mantém a estética original do EPUB.
-    # Não aplicamos CSS forçado aqui, para ficar o mais parecido possível com o original/Calibre.
     if adicionar_marca:
         adicionar_pagina_marca(book)
 
