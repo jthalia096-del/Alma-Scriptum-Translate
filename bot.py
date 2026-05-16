@@ -228,9 +228,30 @@ def revisar_texto_final(texto):
     for errado, certo in correcoes.items():
         texto = texto.replace(errado, certo)
 
+    # Separações genéricas sem mexer em nomes próprios normais.
     texto = re.sub(r"\b([a-záàâãéêíóôõúç]{3,})([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})\b", r"\1 \2", texto)
+
+    # Corrige palavras comuns que grudam em português depois da tradução.
+    palavras_comuns = [
+        "que", "quando", "porque", "mas", "então", "agora", "aqui", "ali",
+        "com", "sem", "para", "pela", "pelo", "num", "numa", "nesse", "nessa",
+        "naquele", "naquela", "minha", "meu", "sua", "seu", "todos", "todas",
+        "memória", "lembrança", "quarto", "casa", "telefone", "mensagem",
+        "pergunta", "resposta", "espero", "preciso", "violência", "física",
+    ]
+
+    for palavra in palavras_comuns:
+        texto = re.sub(
+            rf"([a-záàâãéêíóôõúç]{{3,}})({palavra})\b",
+            r"\1 \2",
+            texto,
+            flags=re.IGNORECASE,
+        )
+
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
     texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([a-záàâãéêíóôõúç])([“\"])", r"\1 \2", texto)
+    texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
     texto = re.sub(r"\s+", " ", texto)
 
     return texto.strip()
@@ -1024,6 +1045,41 @@ def _encontrar_opf_no_epub(arquivos):
     return None
 
 
+
+def atualizar_titulo_epub_zip(arquivos, titulo_final):
+    """
+    Renomeia o título interno do EPUB no arquivo OPF.
+    Isso ajuda leitores/Telegram/Calibre a mostrarem o nome Alma Scriptum,
+    não só o nome do arquivo enviado.
+    """
+    opf_path = _encontrar_opf_no_epub(arquivos)
+
+    if not opf_path or opf_path not in arquivos:
+        return arquivos
+
+    try:
+        soup = BeautifulSoup(arquivos[opf_path].decode("utf-8", errors="ignore"), "xml")
+
+        titulo_limpo = Path(titulo_final).stem
+
+        title_tag = soup.find("dc:title")
+        if title_tag:
+            title_tag.string = titulo_limpo
+        else:
+            metadata = soup.find("metadata")
+            if metadata:
+                novo_title = soup.new_tag("dc:title")
+                novo_title.string = titulo_limpo
+                metadata.append(novo_title)
+
+        arquivos[opf_path] = str(soup).encode("utf-8")
+
+    except Exception as erro:
+        print(f"⚠️ Não consegui renomear o título interno do EPUB: {erro}")
+
+    return arquivos
+
+
 def adicionar_pagina_marca_zip(arquivos):
     """
     Adiciona a página/logo Alma Scriptum sem usar epub.write_epub.
@@ -1169,6 +1225,10 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
+
+    titulo_final = criar_nome_final(Path(entrada).name)
+
+    arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
 
     if adicionar_marca:
         arquivos = adicionar_pagina_marca_zip(arquivos)
