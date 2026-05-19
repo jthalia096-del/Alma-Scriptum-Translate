@@ -4,7 +4,6 @@ import uuid
 import json
 import zipfile
 import time
-import shutil
 import html as html_lib
 import asyncio
 import urllib.parse
@@ -12,7 +11,7 @@ import urllib.request
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-from bs4 import BeautifulSoup, NavigableString, Comment
+from bs4 import BeautifulSoup, NavigableString, Comment, Doctype, Declaration, ProcessingInstruction
 from ebooklib import epub, ITEM_DOCUMENT, ITEM_IMAGE
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
@@ -212,182 +211,20 @@ def revisar_texto_final(texto):
     return texto.strip()
 
 
-# ============================================================
-# LIMPEZA UNIVERSAL DO HTML/EPUB
-# Corrige casos em que leitores mostram CSS como texto na capa/páginas.
-# Exemplo: @page { padding:0pt; margin:0pt } body { ... }
-# ============================================================
-
-CSS_EXPOSTO_REGEX = re.compile(
-    r"(@page\s*\{.*?\}|body\s*\{.*?\}|html\s*\{.*?\}|"
-    r"padding\s*:\s*[^;{}]+;?|margin\s*:\s*[^;{}]+;?|"
-    r"text-align\s*:\s*[^;{}]+;?|font-family\s*:\s*[^;{}]+;?|"
-    r"font-size\s*:\s*[^;{}]+;?|line-height\s*:\s*[^;{}]+;?|"
-    r"display\s*:\s*[^;{}]+;?|width\s*:\s*[^;{}]+;?|height\s*:\s*[^;{}]+;?)",
-    flags=re.IGNORECASE | re.DOTALL,
-)
-
-PARECE_CSS_EXPOSTO_REGEX = re.compile(
-    r"(@page|body\s*\{|html\s*\{|padding\s*:|margin\s*:|text-align\s*:|"
-    r"font-size\s*:|font-family\s*:|line-height\s*:|display\s*:|"
-    r"width\s*:|height\s*:|\.calibre|#[a-zA-Z0-9_-]+\s*\{)",
-    flags=re.IGNORECASE,
-)
-
-
-def corrigir_titulos_simples(texto):
-    if not texto:
-        return texto
-
-    t = re.sub(r"\s+", " ", str(texto)).strip()
-
-    traducoes_exatas = {
-        "cover": "Capa",
-        "title page": "Página de título",
-        "copyright": "Direitos autorais",
-        "dedication": "Dedicatória",
-        "contents": "Sumário",
-        "table of contents": "Sumário",
-        "acknowledgments": "Agradecimentos",
-        "acknowledgements": "Agradecimentos",
-        "about the author": "Sobre a autora",
-        "also by": "Também da autora",
-    }
-
-    return traducoes_exatas.get(t.lower(), texto)
-
-
-def limpar_css_exposto_texto(texto):
-    """
-    Remove CSS que aparece como texto visível.
-    Mantém palavras úteis como Cover, mas traduz para Capa.
-    """
-    if not texto:
-        return texto
-
-    original = str(texto)
-
-    if not PARECE_CSS_EXPOSTO_REGEX.search(original):
-        return corrigir_titulos_simples(original)
-
-    limpo = CSS_EXPOSTO_REGEX.sub(" ", original)
-    limpo = re.sub(r"[{};]+", " ", limpo)
-    limpo = re.sub(r"\s+", " ", limpo).strip()
-
-    # Se sobrou só lixo técnico, apaga.
-    if not limpo:
-        return ""
-
-    if PARECE_CSS_EXPOSTO_REGEX.search(limpo):
-        # Ainda parece CSS, melhor remover para não aparecer em leitores.
-        return ""
-
-    return corrigir_titulos_simples(limpo)
-
-
-def limpar_html_epub_universal(html):
-    """
-    Limpeza leve e segura:
-    - não mexe no CSS real dentro de <style>;
-    - não reescreve o EPUB inteiro;
-    - remove apenas CSS que ficou visível no corpo da página;
-    - traduz títulos básicos como Cover -> Capa.
-    """
-    if not html:
-        return html
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Remove comentários estranhos que alguns EPUBs deixam no corpo.
-    for comentario in soup.find_all(string=lambda x: isinstance(x, Comment)):
-        try:
-            comentario.extract()
-        except Exception:
-            pass
-
-    # Corrige título da aba/metadado interno sem afetar estilo.
-    for tag in soup.find_all(["title"]):
-        txt = tag.get_text(" ", strip=True)
-        novo = corrigir_titulos_simples(txt)
-        if novo != txt:
-            tag.string = novo
-
-    # Remove CSS exposto apenas em textos visíveis, nunca dentro de style/head/script.
-    for node in list(soup.find_all(string=True)):
-        parent = node.parent
-
-        if not parent:
-            continue
-
-        if parent.name in ["style", "script", "head", "meta", "link"]:
-            continue
-
-        texto = str(node)
-
-        if not texto.strip():
-            continue
-
-        novo = limpar_css_exposto_texto(texto)
-
-        if novo == texto:
-            continue
-
-        if novo.strip():
-            node.replace_with(novo)
-        else:
-            try:
-                node.extract()
-            except Exception:
-                node.replace_with("")
-
-    # Se algum parágrafo/div ficou vazio depois da limpeza, remove.
-    for tag in soup.find_all(["p", "div", "span"]):
-        try:
-            if not tag.get_text(" ", strip=True) and not tag.find(["img", "svg"]):
-                tag.decompose()
-        except Exception:
-            pass
-
-    return str(soup)
-
-
-def registrar_imagens_do_epub(zip_in, nomes, pasta_saida):
-    """
-    Só prepara as imagens para edição/tradução externa.
-    O bot não altera imagem automaticamente aqui para não estragar capa/arte.
-    """
-    try:
-        pasta_saida.mkdir(parents=True, exist_ok=True)
-        manifest = []
-
-        for nome in nomes:
-            baixo = nome.lower()
-            if baixo.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
-                destino = pasta_saida / limpar_nome(nome.replace("/", "__"))
-                destino.write_bytes(zip_in.read(nome))
-                manifest.append({"interno": nome, "arquivo": destino.name})
-
-        if manifest:
-            (pasta_saida / "manifest_imagens.json").write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
-
-        return len(manifest)
-    except Exception:
-        return 0
-
-
-
 def texto_sujo(texto):
     if not texto:
         return True
 
-    t = str(texto).lower().strip()
+    t_original = str(texto).strip()
+    t = t_original.lower()
 
     sujeiras = [
-        "xml version", "encoding=", "utf-8", "<?xml",
+        "xml version", "encoding=", "<?xml",
         "<html", "xmlns", "doctype", "{{id_",
+        "html public", "xhtml 1.1", "xhtml11.dtd",
+        "w3.org/tr/xhtml11/dtd", "w3c//dtd",
+        "@page", "body {", "html {", "padding:", "margin:",
+        "text-align:", "font-family:", "line-height:",
     ]
 
     if t in ["html", "body", "head"]:
@@ -397,7 +234,95 @@ def texto_sujo(texto):
         if s in t:
             return True
 
+    # Bloqueia pedaços curtos que são claramente CSS/DTD soltos aparecendo como texto.
+    if len(t_original) <= 500 and re.search(
+        r'(@page\s*\{|body\s*\{|html\s*\{|PUBLIC\s+"-//W3C//DTD|xhtml11\.dtd|'
+        r'padding\s*:|margin\s*:|text-align\s*:|font-size\s*:|font-family\s*:)',
+        t_original,
+        flags=re.IGNORECASE
+    ):
+        return True
+
     return False
+
+
+
+def parece_so_nome_proprio(texto):
+    """
+    Evita jogar nomes de personagens/pessoas no log de atenção.
+    Ex.: Charlotte, Hamilton, Matt, Matthew, Benton Carlisle.
+    """
+    if not texto:
+        return False
+
+    t = re.sub(r"[“”\"'.,;:!?()\\[\\]{}]", " ", str(texto)).strip()
+    t = re.sub(r"\s+", " ", t)
+
+    if not t:
+        return False
+
+    palavras = t.split()
+
+    if len(palavras) > 5:
+        return False
+
+    pequenos_permitidos = {"de", "da", "do", "dos", "das", "van", "von", "del", "di", "la", "le"}
+
+    validas = 0
+    for p in palavras:
+        if p.lower() in pequenos_permitidos:
+            validas += 1
+            continue
+
+        # Nome próprio simples ou inicial.
+        if re.match(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ'’-]{1,}$", p) or re.match(r"^[A-Z]\\.?$", p):
+            validas += 1
+            continue
+
+        return False
+
+    return validas == len(palavras)
+
+
+def limpar_lixo_html_visivel(soup):
+    """
+    Remove DOCTYPE, declarações e CSS/DTD que alguns leitores mostram como texto.
+    Isso corrige sujeira tipo:
+    html PUBLIC "-//W3C//DTD XHTML 1.1//EN" ...
+    @page { padding: 0pt; margin: 0pt }
+    """
+    for node in list(soup.find_all(string=True)):
+        try:
+            if isinstance(node, (Comment, Doctype, Declaration, ProcessingInstruction)):
+                node.extract()
+                continue
+
+            texto = str(node).strip()
+            if not texto:
+                continue
+
+            parent = node.parent
+            parent_name = getattr(parent, "name", "") or ""
+
+            # Nunca deixa lixo de cabeçalho/DTD virar texto visível.
+            if parent_name == "[document]" and texto_sujo(texto):
+                node.extract()
+                continue
+
+            if texto_sujo(texto):
+                # Remove apenas quando for trecho claramente técnico/solto.
+                if len(texto) <= 700 or re.search(r"PUBLIC|DOCTYPE|xhtml11\\.dtd|@page|body\\s*\\{", texto, re.I):
+                    node.extract()
+                    continue
+
+            # Corrige título de capa simples sem mexer na imagem.
+            if texto.strip().lower() == "cover":
+                node.replace_with("Capa")
+
+        except Exception:
+            pass
+
+    return soup
 
 
 def resumo_erros(erros, limite=5):
@@ -654,7 +579,7 @@ def traduzir_bloco_sync(item):
                 or palavra_grudada
                 or site_sobrou
                 or texto_igual_original
-            ):
+            ) and not parece_so_nome_proprio(texto_final):
 
                 erros.append({
                     "bloco": bloco_id,
@@ -670,6 +595,9 @@ def texto_visivel(node):
     if not isinstance(node, NavigableString):
         return False
 
+    if isinstance(node, (Comment, Doctype, Declaration, ProcessingInstruction)):
+        return False
+
     texto = str(node).strip()
 
     if not texto:
@@ -680,7 +608,7 @@ def texto_visivel(node):
     if not parent:
         return False
 
-    if parent.name in ["script", "style", "code", "pre", "head", "meta", "link", "title"]:
+    if parent.name in ["[document]", "script", "style", "code", "pre", "head", "meta", "link", "title"]:
         return False
 
     if texto_sujo(texto):
@@ -773,6 +701,7 @@ async def traduzir_blocos(blocos, mecanismo, workers):
 
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
     soup = BeautifulSoup(html, "html.parser")
+    soup = limpar_lixo_html_visivel(soup)
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
     nos = []
@@ -833,8 +762,8 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
-    # Não limpa o HTML inteiro aqui.
-    # A limpeza global quebrava estética, CSS, alinhamento e podia grudar palavras.
+    # Limpeza final apenas de lixo técnico visível, sem mexer no CSS verdadeiro do EPUB.
+    soup = limpar_lixo_html_visivel(soup)
     html_final = str(soup)
     return html_final, alterados, erros
 
@@ -1163,12 +1092,6 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
     with zipfile.ZipFile(str(entrada), "r") as zip_in:
         nomes = zip_in.namelist()
 
-        # Prepara cópia das imagens do EPUB para futura tradução/edição visual,
-        # sem alterar as imagens originais dentro do livro.
-        # Fica em temp/imagens_extraidas_<id> apenas durante o processamento local.
-        pasta_imagens = TEMP_DIR / f"imagens_extraidas_{uuid.uuid4().hex}"
-        registrar_imagens_do_epub(zip_in, nomes, pasta_imagens)
-
         documentos = [
             nome for nome in nomes
             if nome.lower().endswith(extensoes_html)
@@ -1197,17 +1120,17 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
                                 nome,
                             )
 
-                            # Limpeza universal para leitores como Moon+ Reader, ReadEra, Kindle etc.
-                            # Remove CSS que aparece como texto sem destruir o estilo real do EPUB.
-                            traduzido = limpar_html_epub_universal(traduzido)
-
                             for erro in erros_html:
                                 erro["arquivo"] = f"{i}/{total}"
                                 erros.append(erro)
 
+                            # Sempre grava o HTML tratado, mesmo se não houve tradução,
+                            # porque a limpeza pode ter removido DOCTYPE/CSS aparecendo como texto.
+                            if traduzido and traduzido != conteudo:
+                                dados = traduzido.encode("utf-8")
+
                             if alterados > 0:
                                 traduzidos += 1
-                                dados = traduzido.encode("utf-8")
 
                             print(f"✅ Traduzido {i}/{total}: {nome}")
 
@@ -1229,12 +1152,6 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
-
-    try:
-        if 'pasta_imagens' in locals() and pasta_imagens.exists():
-            shutil.rmtree(pasta_imagens, ignore_errors=True)
-    except Exception:
-        pass
 
     return erros
 
