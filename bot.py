@@ -650,24 +650,107 @@ async def traduzir_blocos(blocos, mecanismo, workers):
     return resultados
 
 
-async def traduzir_html(html, mecanismo, arquivo_nome=""):
-    soup = BeautifulSoup(html, "html.parser")
-    capitulo = contexto_capitulo(soup, arquivo_nome)
 
-    nos = []
+def limpar_texto_pre_traducao(texto):
+    """
+    Limpeza ANTES da tradução, para imitar melhor o comportamento do Calibre:
+    remove hifenização falsa e espaços quebrados antes de enviar ao Google.
+    """
+    if not texto:
+        return texto
+
+    texto = str(texto)
+    texto = texto.replace("\u00ad", "")
+    texto = texto.replace("‐", "-").replace("‑", "-")
+
+    texto = re.sub(
+        r"([A-Za-zÀ-ÿ]{2,})-\s+([a-záàâãéêíóôõúç]{2,})",
+        r"\1\2",
+        texto
+    )
+
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
+def bloco_traduzivel(tag):
+    if not tag or not getattr(tag, "name", None):
+        return False
+
+    if tag.name in ["script", "style", "code", "pre", "head", "meta", "link", "title"]:
+        return False
+
+    if tag.find(["img", "svg", "math"]):
+        return False
+
+    if tag.find(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"]):
+        return False
+
+    texto = tag.get_text(" ", strip=True)
+
+    if not texto or len(texto.strip()) < 2:
+        return False
+
+    if texto_sujo(texto):
+        return False
+
+    if not re.search(r"[A-Za-z]", texto):
+        return False
+
+    return True
+
+
+def coletar_blocos_texto(soup):
+    candidatos = soup.find_all(["p", "div", "span", "li", "blockquote", "h1", "h2", "h3", "h4"])
+    blocos = []
     contador = 1
+
+    for tag in candidatos:
+        if not bloco_traduzivel(tag):
+            continue
+
+        texto = limpar_texto_pre_traducao(tag.get_text(" ", strip=True))
+
+        if not texto or len(texto) < 2:
+            continue
+
+        blocos.append((contador, tag, texto))
+        contador += 1
+
+    if blocos:
+        return blocos
 
     for node in soup.find_all(string=True):
         if not texto_visivel(node):
             continue
 
-        texto = str(node)
+        texto = limpar_texto_pre_traducao(str(node))
 
         if len(texto.strip()) < 2:
             continue
 
-        nos.append((contador, node, texto))
+        blocos.append((contador, node, texto))
         contador += 1
+
+    return blocos
+
+
+def substituir_texto_no_item(item_html, texto_final):
+    if hasattr(item_html, "clear") and hasattr(item_html, "append"):
+        item_html.clear()
+        item_html.append(NavigableString(texto_final))
+    else:
+        item_html.replace_with(NavigableString(texto_final))
+
+
+async def traduzir_html(html, mecanismo, arquivo_nome=""):
+    soup = BeautifulSoup(html, "html.parser")
+    capitulo = contexto_capitulo(soup, arquivo_nome)
+
+    # NOVA LÓGICA DE TESTE:
+    # Traduz por blocos visuais inteiros, parecido com o Calibre.
+    # Isso evita traduzir pedaços soltos de spans e reduz palavras coladas.
+    nos = coletar_blocos_texto(soup)
 
     if not nos:
         return str(soup), 0, []
@@ -696,11 +779,11 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             continue
 
         for item, texto_traduzido in zip(bloco, partes_traduzidas):
-            _, node, original = item
+            _, node_or_tag, original = item
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
-                node.replace_with(NavigableString(texto_final))
+                substituir_texto_no_item(node_or_tag, texto_final)
 
                 if texto_final.strip() != original.strip():
                     alterados += 1
@@ -712,8 +795,6 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
-    # Não limpa o HTML inteiro aqui.
-    # A limpeza global quebrava estética, CSS, alinhamento e podia grudar palavras.
     html_final = str(soup)
     return html_final, alterados, erros
 
