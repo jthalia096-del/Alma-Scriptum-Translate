@@ -475,26 +475,27 @@ def limpar_quebras_calibre_texto(texto):
 
 def limpeza_final_por_blocos_calibre(soup):
     """
-    Passada final no HTML já traduzido.
-    Pega o texto renderizado de cada parágrafo/bloco, como um leitor faria,
-    e corrige palavras partidas entre spans.
+    Passada final segura no HTML já traduzido.
+    Evita recursão: só mexe em tags simples de texto direto.
+    Não mexe em DIVs grandes, não mexe em blocos com filhos complexos.
     """
-    blocos = soup.find_all(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"])
+    tags_seguras = soup.find_all(["p", "li", "blockquote", "h1", "h2", "h3", "h4"])
 
-    for tag in blocos:
+    for tag in tags_seguras:
         try:
             if tag.name in ["script", "style", "code", "pre", "head", "title"]:
                 continue
 
-            if tag.find(["img", "svg", "math"]):
+            if tag.find(["img", "svg", "math", "table", "ul", "ol"]):
                 continue
 
-            # Não mexe em bloco que contém outro bloco grande.
-            if tag.find(["p", "div", "li", "blockquote"]):
+            # Se tem muitos filhos/tags internas, não mexe para não quebrar EPUB.
+            filhos_tags = tag.find_all(True, recursive=False)
+            if len(filhos_tags) > 3:
                 continue
 
             original = tag.get_text(" ", strip=True)
-            if not original:
+            if not original or len(original) > 1200:
                 continue
 
             limpo = limpar_quebras_calibre_texto(original)
@@ -504,7 +505,7 @@ def limpeza_final_por_blocos_calibre(soup):
                 tag.append(NavigableString(limpo))
 
         except Exception:
-            pass
+            continue
 
     return soup
 
@@ -1017,7 +1018,12 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
                 erros.append(erro)
 
     soup = limpar_lixo_tecnico_soup(soup)
-    soup = limpeza_final_por_blocos_calibre(soup)
+
+    try:
+        soup = limpeza_final_por_blocos_calibre(soup)
+    except Exception:
+        pass
+
     html_final = str(soup)
     return html_final, alterados, erros
 
