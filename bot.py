@@ -163,6 +163,200 @@ def substituir_sites_por_marca(texto):
     return texto.strip()
 
 
+
+PALAVRAS_CAPITALIZADAS_NAO_PROTEGER = {
+    "A", "An", "And", "As", "At", "Be", "But", "By", "For", "From", "He", "Her",
+    "His", "I", "If", "In", "Into", "It", "Its", "Me", "My", "No", "Not", "Of",
+    "On", "Or", "Our", "She", "So", "That", "The", "Their", "Then", "There",
+    "They", "This", "To", "Was", "We", "Were", "What", "When", "Where", "Who",
+    "Why", "With", "You", "Your",
+    "Chapter", "Prologue", "Epilogue", "Dedication", "Acknowledgments", "Cover",
+    "Capítulo", "Prólogo", "Epílogo", "Capa",
+}
+
+# Traduções consagradas que PODEM traduzir, então não protege.
+NOMES_CONSAGRADOS_TRADUZIVEIS = {
+    "White House": "Casa Branca",
+    "United States": "Estados Unidos",
+    "New York Times": "New York Times",
+}
+
+def limpar_html_bruto_antes_parse(html):
+    """
+    Remove DOCTYPE/XML/DTD antes do BeautifulSoup.
+    Isso evita aparecer no leitor:
+    html PUBLIC "-//W3C//DTD XHTML 1.1//EN" ...
+    """
+    if not html:
+        return html
+
+    html = re.sub(r"<\?xml[^>]*\?>", "", html, flags=re.I | re.S)
+    html = re.sub(r"<!DOCTYPE[^>]*>", "", html, flags=re.I | re.S)
+
+    # Alguns EPUBs quebrados deixam o DTD sem <!DOCTYPE ...>, como texto solto.
+    html = re.sub(
+        r'html\s+PUBLIC\s+"-//W3C//DTD\s+XHTML\s+1\.1//EN"\s+"https?://www\.w3\.org/TR/xhtml11/DTD/xhtml11\.dtd"',
+        "",
+        html,
+        flags=re.I | re.S
+    )
+    html = re.sub(
+        r'html\s+PUBLIC\s+"-//W3C//DTD\s+XHTML\s+1\.1//EN"\s+"https?://www\.w3\.org/TR/xhtml11/DTD/xhtml11\.dtd"\s*',
+        "",
+        html,
+        flags=re.I | re.S
+    )
+    return html
+
+
+def limpar_lixo_tecnico_visivel_soup(soup):
+    padrao_lixo = re.compile(
+        r'html\s+PUBLIC|DOCTYPE|xhtml\s*1\.1|xhtml11\.dtd|'
+        r'w3\.org/TR/xhtml11/DTD|W3C//DTD|'
+        r'@page\s*\{|body\s*\{|html\s*\{|'
+        r'padding\s*:|margin\s*:|text-align\s*:|font-family\s*:|line-height\s*:',
+        re.I | re.S
+    )
+
+    for node in list(soup.find_all(string=True)):
+        try:
+            if isinstance(node, (Comment, Doctype, Declaration, ProcessingInstruction)):
+                node.extract()
+                continue
+
+            texto = str(node).strip()
+            if not texto:
+                continue
+
+            parent = node.parent
+            parent_name = getattr(parent, "name", "") or ""
+
+            if parent_name in ["style", "script", "head", "meta", "link", "title"]:
+                continue
+
+            if padrao_lixo.search(texto):
+                node.extract()
+                continue
+
+            if texto.strip().lower() == "cover":
+                node.replace_with("Capa")
+
+        except Exception:
+            pass
+
+    return soup
+
+
+def parece_so_nome_proprio(texto):
+    if not texto:
+        return False
+
+    t = str(texto).strip()
+    t = re.sub(r"[“”\"'.,;:!?()\[\]{}]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+
+    if not t:
+        return False
+
+    palavras = t.split()
+    if len(palavras) > 6:
+        return False
+
+    conectores = {"de", "da", "do", "dos", "das", "van", "von", "del", "di", "la", "le", "of", "the"}
+
+    for p in palavras:
+        pl = p.lower()
+        if pl in conectores:
+            continue
+        if re.match(r"^[A-Z]{2,6}$", p):
+            continue
+        if re.match(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ'’\\-]{1,}$", p):
+            continue
+        if re.match(r"^[A-Z]\\.?$", p):
+            continue
+        return False
+
+    return True
+
+
+def extrair_nomes_protegidos(texto):
+    """
+    Protege nomes de pessoas, cidades, marcas e lugares para o Google não inventar tradução.
+    Ex.: Matthew, Charlotte, Benton Carlisle, Jefferson, Hamilton, New York.
+    """
+    if not texto:
+        return []
+
+    achados = []
+
+    # Expressões com 1 a 4 palavras capitalizadas.
+    padrao = re.compile(
+        r"(?<![A-Za-zÀ-ÿ])([A-Z][a-zA-ZÀ-ÿ'’\\-]{2,}(?:\\s+(?:of|the|de|da|do|dos|das|van|von|del|di|la|le)?\\s*[A-Z][a-zA-ZÀ-ÿ'’\\-]{2,}){0,3})"
+    )
+
+    for m in padrao.finditer(texto):
+        termo = re.sub(r"\s+", " ", m.group(1)).strip()
+
+        if not termo:
+            continue
+
+        if termo in NOMES_CONSAGRADOS_TRADUZIVEIS:
+            continue
+
+        partes = termo.split()
+        partes_reais = [p for p in partes if p.lower() not in {"of", "the", "de", "da", "do", "dos", "das", "van", "von", "del", "di", "la", "le"}]
+
+        if not partes_reais:
+            continue
+
+        # Evita proteger palavras comuns de início de frase.
+        if len(partes_reais) == 1 and partes_reais[0] in PALAVRAS_CAPITALIZADAS_NAO_PROTEGER:
+            continue
+
+        # Evita proteger frases curtas comuns.
+        if termo in PALAVRAS_CAPITALIZADAS_NAO_PROTEGER:
+            continue
+
+        # Não protege início de frase se for palavra comum + resto minúsculo.
+        if len(partes_reais) == 1 and m.start() == 0 and partes_reais[0] in PALAVRAS_CAPITALIZADAS_NAO_PROTEGER:
+            continue
+
+        achados.append(termo)
+
+    # Maiores primeiro para não quebrar nomes compostos.
+    achados = sorted(set(achados), key=len, reverse=True)
+    return achados
+
+
+def proteger_nomes_antes_traduzir(texto):
+    nomes = extrair_nomes_protegidos(texto)
+    mapa = {}
+
+    protegido = texto
+
+    for i, nome in enumerate(nomes):
+        marcador = f"ZZNOME{i:04d}ZZ"
+        mapa[marcador] = nome
+        protegido = re.sub(rf"(?<![A-Za-zÀ-ÿ]){re.escape(nome)}(?![A-Za-zÀ-ÿ])", marcador, protegido)
+
+    return protegido, mapa
+
+
+def restaurar_nomes_depois_traduzir(texto, mapa):
+    if not mapa:
+        return texto
+
+    for marcador, nome in mapa.items():
+        # Google às vezes coloca espaços no marcador.
+        padrao = re.escape(marcador)
+        texto = re.sub(padrao, nome, texto, flags=re.I)
+
+        com_espacos = r"\s*".join(list(marcador))
+        texto = re.sub(com_espacos, nome, texto, flags=re.I)
+
+    return texto
+
+
 def revisar_texto_final(texto):
     if not texto:
         return texto
@@ -177,6 +371,10 @@ def revisar_texto_final(texto):
     texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2", texto)
 
     correcoes = {
+        "To futuro": "Para o futuro",
+        "to futuro": "Para o futuro",
+        "Tpara o futuro": "Para o futuro",
+        "T para o futuro": "Para o futuro",
         "deTODOS": "de TODOS",
         "de TODOS.Cada": "de TODOS. Cada",
         "TODOS.Cada": "TODOS. Cada",
@@ -231,105 +429,6 @@ def texto_sujo(texto):
 
     return False
 
-
-
-def parece_so_nome_proprio(texto):
-    """
-    Evita colocar nomes próprios/cidades/marcas simples no log.
-    Exemplos: Charlotte, Matthew, Hamilton, Benton Carlisle, New York, Jefferson Hotel.
-    Não traduz nomes; só evita falso ponto de atenção.
-    """
-    if not texto:
-        return False
-
-    t = str(texto).strip()
-    t = re.sub(r"[“”\"'.,;:!?()\[\]{}]", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-
-    if not t:
-        return False
-
-    palavras = t.split()
-
-    # Frase grande não é só nome próprio.
-    if len(palavras) > 6:
-        return False
-
-    conectores = {"de", "da", "do", "dos", "das", "van", "von", "del", "di", "la", "le", "of", "the"}
-
-    ok = 0
-    for p in palavras:
-        pl = p.lower()
-
-        if pl in conectores:
-            ok += 1
-            continue
-
-        # Siglas tipo USA, NY, FBI
-        if re.match(r"^[A-Z]{2,6}$", p):
-            ok += 1
-            continue
-
-        # Nome próprio comum
-        if re.match(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ'’\\-]{1,}$", p):
-            ok += 1
-            continue
-
-        # Inicial
-        if re.match(r"^[A-Z]\\.?$", p):
-            ok += 1
-            continue
-
-        return False
-
-    return ok == len(palavras)
-
-
-def limpar_lixo_tecnico_visivel_soup(soup):
-    """
-    Limpa somente lixo técnico que apareceu como texto visível.
-    NÃO mexe em espaçamento, CSS real, classes, estilos nem no texto traduzido.
-    Remove coisas tipo:
-    html PUBLIC "-//W3C//DTD XHTML 1.1//EN" ...
-    @page { padding: 0pt; margin: 0pt }
-    """
-    padrao_lixo = re.compile(
-        r'html\s+PUBLIC|DOCTYPE|xhtml\s*1\.1|xhtml11\.dtd|'
-        r'w3\.org/TR/xhtml11/DTD|W3C//DTD|'
-        r'@page\s*\{|body\s*\{|html\s*\{|'
-        r'padding\s*:|margin\s*:|text-align\s*:|font-family\s*:|line-height\s*:',
-        re.IGNORECASE | re.DOTALL
-    )
-
-    for node in list(soup.find_all(string=True)):
-        try:
-            if isinstance(node, (Comment, Doctype, Declaration, ProcessingInstruction)):
-                node.extract()
-                continue
-
-            texto = str(node).strip()
-            if not texto:
-                continue
-
-            parent = node.parent
-            parent_name = getattr(parent, "name", "") or ""
-
-            # Nunca mexe em texto dentro de style/head/script, porque isso pode quebrar CSS verdadeiro.
-            if parent_name in ["style", "script", "head", "meta", "link", "title"]:
-                continue
-
-            if padrao_lixo.search(texto):
-                node.extract()
-                continue
-
-            # Traduz título simples da página de capa, sem mexer em imagem.
-            if texto.strip().lower() == "cover":
-                node.replace_with("Capa")
-
-        except Exception:
-            pass
-
-    return soup
 
 def resumo_erros(erros, limite=5):
     if not erros:
@@ -446,10 +545,13 @@ def traduzir_com_retry(texto, mecanismo):
     ultimo_erro = None
     texto = substituir_sites_por_marca(texto)
 
+    texto_protegido, mapa_nomes = proteger_nomes_antes_traduzir(texto)
+
     for mecanismo_teste in ordem_fallback(mecanismo):
         for tentativa in range(REQUEST_ATTEMPTS):
             try:
-                traducao = traduzir_google(texto, mecanismo_teste)
+                traducao = traduzir_google(texto_protegido, mecanismo_teste)
+                traducao = restaurar_nomes_depois_traduzir(traducao, mapa_nomes)
 
                 if traducao and traducao.strip() and traducao.strip() != texto.strip():
                     return revisar_texto_final(traducao), None
@@ -462,7 +564,7 @@ def traduzir_com_retry(texto, mecanismo):
             if tentativa < REQUEST_ATTEMPTS - 1:
                 time.sleep(2 + tentativa * 2)
 
-    return revisar_texto_final(texto), ultimo_erro or "falha desconhecida"
+    return revisar_texto_final(restaurar_nomes_depois_traduzir(texto_protegido, mapa_nomes)), ultimo_erro or "falha desconhecida"
 
 
 def traduzir_com_fallback(texto, mecanismo):
@@ -706,6 +808,7 @@ async def traduzir_blocos(blocos, mecanismo, workers):
 
 
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
+    html = limpar_html_bruto_antes_parse(html)
     soup = BeautifulSoup(html, "html.parser")
     soup = limpar_lixo_tecnico_visivel_soup(soup)
     capitulo = contexto_capitulo(soup, arquivo_nome)
@@ -1130,8 +1233,7 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
                                 erro["arquivo"] = f"{i}/{total}"
                                 erros.append(erro)
 
-                            # Grava o HTML se a limpeza removeu lixo técnico,
-                            # mas mantém a lógica de tradução original.
+                            # Grava se a limpeza removeu lixo técnico, mantendo a tradução original.
                             if traduzido and traduzido != conteudo:
                                 dados = traduzido.encode("utf-8")
 
