@@ -215,16 +215,11 @@ def texto_sujo(texto):
     if not texto:
         return True
 
-    t_original = str(texto).strip()
-    t = t_original.lower()
+    t = str(texto).lower().strip()
 
     sujeiras = [
-        "xml version", "encoding=", "<?xml",
+        "xml version", "encoding=", "utf-8", "<?xml",
         "<html", "xmlns", "doctype", "{{id_",
-        "html public", "xhtml 1.1", "xhtml11.dtd",
-        "w3.org/tr/xhtml11/dtd", "w3c//dtd",
-        "@page", "body {", "html {", "padding:", "margin:",
-        "text-align:", "font-family:", "line-height:",
     ]
 
     if t in ["html", "body", "head"]:
@@ -234,63 +229,78 @@ def texto_sujo(texto):
         if s in t:
             return True
 
-    # Bloqueia pedaços curtos que são claramente CSS/DTD soltos aparecendo como texto.
-    if len(t_original) <= 500 and re.search(
-        r'(@page\s*\{|body\s*\{|html\s*\{|PUBLIC\s+"-//W3C//DTD|xhtml11\.dtd|'
-        r'padding\s*:|margin\s*:|text-align\s*:|font-size\s*:|font-family\s*:)',
-        t_original,
-        flags=re.IGNORECASE
-    ):
-        return True
-
     return False
 
 
 
 def parece_so_nome_proprio(texto):
     """
-    Evita jogar nomes de personagens/pessoas no log de atenção.
-    Ex.: Charlotte, Hamilton, Matt, Matthew, Benton Carlisle.
+    Evita colocar nomes próprios/cidades/marcas simples no log.
+    Exemplos: Charlotte, Matthew, Hamilton, Benton Carlisle, New York, Jefferson Hotel.
+    Não traduz nomes; só evita falso ponto de atenção.
     """
     if not texto:
         return False
 
-    t = re.sub(r"[“”\"'.,;:!?()\\[\\]{}]", " ", str(texto)).strip()
-    t = re.sub(r"\s+", " ", t)
+    t = str(texto).strip()
+    t = re.sub(r"[“”\"'.,;:!?()\[\]{}]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
 
     if not t:
         return False
 
     palavras = t.split()
 
-    if len(palavras) > 5:
+    # Frase grande não é só nome próprio.
+    if len(palavras) > 6:
         return False
 
-    pequenos_permitidos = {"de", "da", "do", "dos", "das", "van", "von", "del", "di", "la", "le"}
+    conectores = {"de", "da", "do", "dos", "das", "van", "von", "del", "di", "la", "le", "of", "the"}
 
-    validas = 0
+    ok = 0
     for p in palavras:
-        if p.lower() in pequenos_permitidos:
-            validas += 1
+        pl = p.lower()
+
+        if pl in conectores:
+            ok += 1
             continue
 
-        # Nome próprio simples ou inicial.
-        if re.match(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ'’-]{1,}$", p) or re.match(r"^[A-Z]\\.?$", p):
-            validas += 1
+        # Siglas tipo USA, NY, FBI
+        if re.match(r"^[A-Z]{2,6}$", p):
+            ok += 1
+            continue
+
+        # Nome próprio comum
+        if re.match(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ'’\\-]{1,}$", p):
+            ok += 1
+            continue
+
+        # Inicial
+        if re.match(r"^[A-Z]\\.?$", p):
+            ok += 1
             continue
 
         return False
 
-    return validas == len(palavras)
+    return ok == len(palavras)
 
 
-def limpar_lixo_html_visivel(soup):
+def limpar_lixo_tecnico_visivel_soup(soup):
     """
-    Remove DOCTYPE, declarações e CSS/DTD que alguns leitores mostram como texto.
-    Isso corrige sujeira tipo:
+    Limpa somente lixo técnico que apareceu como texto visível.
+    NÃO mexe em espaçamento, CSS real, classes, estilos nem no texto traduzido.
+    Remove coisas tipo:
     html PUBLIC "-//W3C//DTD XHTML 1.1//EN" ...
     @page { padding: 0pt; margin: 0pt }
     """
+    padrao_lixo = re.compile(
+        r'html\s+PUBLIC|DOCTYPE|xhtml\s*1\.1|xhtml11\.dtd|'
+        r'w3\.org/TR/xhtml11/DTD|W3C//DTD|'
+        r'@page\s*\{|body\s*\{|html\s*\{|'
+        r'padding\s*:|margin\s*:|text-align\s*:|font-family\s*:|line-height\s*:',
+        re.IGNORECASE | re.DOTALL
+    )
+
     for node in list(soup.find_all(string=True)):
         try:
             if isinstance(node, (Comment, Doctype, Declaration, ProcessingInstruction)):
@@ -304,18 +314,15 @@ def limpar_lixo_html_visivel(soup):
             parent = node.parent
             parent_name = getattr(parent, "name", "") or ""
 
-            # Nunca deixa lixo de cabeçalho/DTD virar texto visível.
-            if parent_name == "[document]" and texto_sujo(texto):
+            # Nunca mexe em texto dentro de style/head/script, porque isso pode quebrar CSS verdadeiro.
+            if parent_name in ["style", "script", "head", "meta", "link", "title"]:
+                continue
+
+            if padrao_lixo.search(texto):
                 node.extract()
                 continue
 
-            if texto_sujo(texto):
-                # Remove apenas quando for trecho claramente técnico/solto.
-                if len(texto) <= 700 or re.search(r"PUBLIC|DOCTYPE|xhtml11\\.dtd|@page|body\\s*\\{", texto, re.I):
-                    node.extract()
-                    continue
-
-            # Corrige título de capa simples sem mexer na imagem.
+            # Traduz título simples da página de capa, sem mexer em imagem.
             if texto.strip().lower() == "cover":
                 node.replace_with("Capa")
 
@@ -323,7 +330,6 @@ def limpar_lixo_html_visivel(soup):
             pass
 
     return soup
-
 
 def resumo_erros(erros, limite=5):
     if not erros:
@@ -701,7 +707,7 @@ async def traduzir_blocos(blocos, mecanismo, workers):
 
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
     soup = BeautifulSoup(html, "html.parser")
-    soup = limpar_lixo_html_visivel(soup)
+    soup = limpar_lixo_tecnico_visivel_soup(soup)
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
     nos = []
@@ -762,8 +768,8 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             erro["capitulo"] = capitulo
             erros.append(erro)
 
-    # Limpeza final apenas de lixo técnico visível, sem mexer no CSS verdadeiro do EPUB.
-    soup = limpar_lixo_html_visivel(soup)
+    # Limpeza final só do lixo técnico visível, sem mexer no CSS real nem no espaçamento.
+    soup = limpar_lixo_tecnico_visivel_soup(soup)
     html_final = str(soup)
     return html_final, alterados, erros
 
@@ -1124,8 +1130,8 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
                                 erro["arquivo"] = f"{i}/{total}"
                                 erros.append(erro)
 
-                            # Sempre grava o HTML tratado, mesmo se não houve tradução,
-                            # porque a limpeza pode ter removido DOCTYPE/CSS aparecendo como texto.
+                            # Grava o HTML se a limpeza removeu lixo técnico,
+                            # mas mantém a lógica de tradução original.
                             if traduzido and traduzido != conteudo:
                                 dados = traduzido.encode("utf-8")
 
