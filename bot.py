@@ -255,6 +255,12 @@ def revisar_texto_final(texto):
     texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
     texto = re.sub(r"\s+", " ", texto)
 
+    # Junta fragmentos de palavras quebradas sem depender de lista manual infinita.
+    texto = juntar_fragmentos_de_palavras_portuguesas(texto)
+
+    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
+    texto = re.sub(r"\s+", " ", texto)
+
     return texto.strip()
 
 
@@ -295,7 +301,7 @@ def texto_sujo(texto):
 def parece_nome_proprio_ou_lugar(texto):
     """
     Usado SOMENTE para não colocar nomes próprios/cidades/países/marcas no ponto de atenção.
-    Não mexe na tradução.
+    Não interfere na tradução.
     """
     if not texto:
         return False
@@ -355,7 +361,7 @@ def parece_nome_proprio_ou_lugar(texto):
 def limpar_lixo_tecnico_bruto_html(html):
     """
     Remove somente lixo técnico de EPUB quebrado, antes do BeautifulSoup.
-    Não altera texto de história e não altera a lógica de tradução.
+    Não altera a lógica de tradução.
     """
     if not html:
         return html
@@ -422,6 +428,97 @@ def limpar_lixo_tecnico_soup(soup):
             pass
 
     return soup
+
+
+def normalizar_hifenizacao_texto(texto):
+    """
+    Junta hifenização falsa antes da tradução:
+    liber- dades -> liberdades
+    algu- mas -> algumas
+    histó- ria -> história
+    Também remove soft-hyphen invisível.
+    """
+    if not texto:
+        return texto
+
+    texto = str(texto)
+    texto = texto.replace("\u00ad", "")
+    texto = texto.replace("‐", "-").replace("‑", "-")
+
+    # Junta palavras quebradas por hífen e espaço/quebra.
+    texto = re.sub(
+        r"([A-Za-zÀ-ÿ]{2,})\s*-\s+([a-záàâãéêíóôõúç]{2,})",
+        r"\1\2",
+        texto
+    )
+
+    # Junta hifenização em quebra HTML que virou espaço.
+    texto = re.sub(
+        r"([A-Za-zÀ-ÿ]{2,})-\s*([a-záàâãéêíóôõúç]{2,})",
+        r"\1\2",
+        texto
+    )
+
+    # Normaliza espaços sem mudar conteúdo.
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
+def juntar_fragmentos_de_palavras_portuguesas(texto):
+    """
+    Correção automática leve APÓS a tradução.
+    Não usa lista manual de nomes.
+    Foca em fragmentos minúsculos típicos de quebra/hifenização:
+    algu mas -> algumas
+    li berdades -> liberdades
+    histó ria -> história
+    Não mexe em nomes próprios.
+    """
+    if not texto:
+        return texto
+
+    # Junta quando uma palavra minúscula curta foi quebrada antes de uma continuação minúscula.
+    # Ex.: algu mas, lib erdades, histó ria, polí tico.
+    padrao = re.compile(
+        r"\b([a-záàâãéêíóôõúç]{2,6})\s+([a-záàâãéêíóôõúç]{2,10})\b"
+    )
+
+    conectores = {
+        "de", "da", "do", "das", "dos", "em", "no", "na", "nos", "nas",
+        "por", "para", "com", "sem", "que", "mas", "uma", "um", "as", "os",
+        "ao", "aos", "ou", "e", "se", "me", "te", "lhe"
+    }
+
+    # Fragmentos que geralmente aparecem no começo de palavra quebrada.
+    inicios_fragmento = {
+        "algu", "lib", "li", "histó", "histo", "análi", "anali",
+        "polí", "poli", "elei", "fic", "dese", "apaixon", "protagonis",
+        "memó", "memo", "fí", "fi", "rá", "ra", "cére", "cere",
+        "conse", "sozin"
+    }
+
+    def troca(m):
+        a = m.group(1)
+        b = m.group(2)
+
+        if a.lower() in conectores or b.lower() in conectores:
+            return m.group(0)
+
+        if a.lower() in inicios_fragmento:
+            return a + b
+
+        # Regra cautelosa: só junta fragmento curto + pedaço longo quando não parece duas palavras normais.
+        if len(a) <= 3 and len(b) >= 5 and a.lower() not in conectores:
+            return a + b
+
+        return m.group(0)
+
+    texto = padrao.sub(troca, texto)
+
+    # Hífen com espaço em pronome fica correto.
+    texto = re.sub(r"\b([A-Za-zÀ-ÿ]+)\s*-\s*(se|me|te|lhe|nos|vos)\b", r"\1-\2", texto, flags=re.I)
+
+    return texto
 
 def resumo_erros(erros, limite=5):
     if not erros:
@@ -803,21 +900,7 @@ def limpar_texto_pre_traducao(texto):
     Limpeza ANTES da tradução, para imitar melhor o comportamento do Calibre:
     remove hifenização falsa e espaços quebrados antes de enviar ao Google.
     """
-    if not texto:
-        return texto
-
-    texto = str(texto)
-    texto = texto.replace("\u00ad", "")
-    texto = texto.replace("‐", "-").replace("‑", "-")
-
-    texto = re.sub(
-        r"([A-Za-zÀ-ÿ]{2,})-\s+([a-záàâãéêíóôõúç]{2,})",
-        r"\1\2",
-        texto
-    )
-
-    texto = re.sub(r"\s+", " ", texto)
-    return texto.strip()
+    return normalizar_hifenizacao_texto(texto)
 
 
 def bloco_traduzivel(tag):
