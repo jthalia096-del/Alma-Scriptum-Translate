@@ -254,7 +254,7 @@ def revisar_texto_final(texto):
     texto = re.sub(r"([a-záàâãéêíóôõúç])([“\"])", r"\1 \2", texto)
     texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
     texto = re.sub(r"\s+", " ", texto)
-    texto = limpar_quebras_calibre_texto(texto)
+
     return texto.strip()
 
 
@@ -262,7 +262,8 @@ def texto_sujo(texto):
     if not texto:
         return True
 
-    t = str(texto).lower().strip()
+    t_original = str(texto).strip()
+    t = t_original.lower()
     compacto = re.sub(r"[\s\"'<>/\\:;,.()-]+", "", t)
 
     sujeiras = [
@@ -292,6 +293,10 @@ def texto_sujo(texto):
 
 
 def parece_nome_proprio_ou_lugar(texto):
+    """
+    Usado SOMENTE para não colocar nomes próprios/cidades/países/marcas no ponto de atenção.
+    Não mexe na tradução.
+    """
     if not texto:
         return False
 
@@ -303,6 +308,7 @@ def parece_nome_proprio_ou_lugar(texto):
         return False
 
     palavras = t.split()
+
     if len(palavras) > 7:
         return False
 
@@ -312,41 +318,52 @@ def parece_nome_proprio_ou_lugar(texto):
         "of", "the", "and", "y", "e"
     }
 
-    comuns = {
+    comuns_inicio_frase = {
         "The", "And", "But", "For", "This", "That", "There", "Then", "When",
         "Where", "What", "Why", "How", "He", "She", "They", "We", "You", "I",
         "A", "An", "In", "On", "At", "To", "From", "With", "Without",
         "Chapter", "Prologue", "Epilogue", "Cover", "Dedication"
     }
 
-    reais = [p for p in palavras if p.lower() not in conectores]
-    if not reais:
+    palavras_reais = [p for p in palavras if p.lower() not in conectores]
+    if not palavras_reais:
         return False
 
-    if len(reais) == 1 and reais[0] in comuns:
+    if len(palavras_reais) == 1 and palavras_reais[0] in comuns_inicio_frase:
         return False
 
     for p in palavras:
-        if p.lower() in conectores:
+        pl = p.lower()
+
+        if pl in conectores:
             continue
+
         if re.match(r"^[A-Z]{2,8}$", p):
             continue
+
         if re.match(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ'’\-]{1,}$", p):
             continue
+
         if re.match(r"^[A-Z]\.?$", p):
             continue
+
         return False
 
     return True
 
 
 def limpar_lixo_tecnico_bruto_html(html):
+    """
+    Remove somente lixo técnico de EPUB quebrado, antes do BeautifulSoup.
+    Não altera texto de história e não altera a lógica de tradução.
+    """
     if not html:
         return html
 
     html = re.sub(r"<\?xml[^>]*\?>", "", html, flags=re.I | re.S)
     html = re.sub(r"<!DOCTYPE[^>]*(?:>|$)", "", html, flags=re.I | re.S)
 
+    # DTD solto como texto, inclusive com espaços/quebras estranhas.
     html = re.sub(
         r"(?is)\bhtml\s+PUBLIC\s*[\"']?\s*-\s*//\s*W3C\s*//\s*DTD\s+XHTML\s+1\.1\s*//\s*EN\s*[\"']?\s*[\"']?\s*https?\s*:\s*/\s*/\s*www\s*\.?\s*w3\s*\.?\s*org\s*/\s*TR\s*/\s*xhtml11\s*/\s*DTD\s*/\s*xhtml11\s*\.?\s*dtd\s*[\"']?",
         "",
@@ -363,6 +380,10 @@ def limpar_lixo_tecnico_bruto_html(html):
 
 
 def limpar_lixo_tecnico_soup(soup):
+    """
+    Remove lixo técnico visível já dentro do BeautifulSoup.
+    Não mexe em <style>, <head>, CSS real, classes ou layout.
+    """
     for node in list(soup.find_all(string=True)):
         try:
             if isinstance(node, (Comment, Doctype, Declaration, ProcessingInstruction)):
@@ -399,113 +420,6 @@ def limpar_lixo_tecnico_soup(soup):
 
         except Exception:
             pass
-
-    return soup
-
-
-def limpar_quebras_calibre_texto(texto):
-    """
-    Limpeza final por bloco inteiro.
-    Serve para quando o EPUB separa uma palavra em vários spans/tags:
-    algu mas -> algumas
-    li berdades -> liberdades
-    análi se -> análise
-    """
-    if not texto:
-        return texto
-
-    texto = str(texto)
-    texto = texto.replace("\u00ad", "")
-    texto = texto.replace("‐", "-").replace("‑", "-")
-
-    # Hifenização real: liber- dades / liber-\ndades
-    texto = re.sub(
-        r"([A-Za-zÀ-ÿ]{2,})\s*-\s+([a-záàâãéêíóôõúç]{2,})",
-        r"\1\2",
-        texto
-    )
-    texto = re.sub(
-        r"([A-Za-zÀ-ÿ]{2,})-\s*([a-záàâãéêíóôõúç]{2,})",
-        r"\1\2",
-        texto
-    )
-
-    # Fragmentos comuns gerados por quebra visual do EPUB, mas em regra automática.
-    fragmentos = {
-        "algu": ["mas"],
-        "li": ["berdades"],
-        "lib": ["erdades"],
-        "análi": ["se"],
-        "anali": ["se"],
-        "histó": ["ria"],
-        "histo": ["ria"],
-        "polí": ["tico"],
-        "poli": ["tico"],
-        "elei": ["torais", "ção", "cao"],
-        "fic": ["ção", "cao"],
-        "dese": ["jei", "jar", "java"],
-        "apaixon": ["em"],
-        "protagonis": ["ta"],
-        "memó": ["ria"],
-        "memo": ["ria"],
-        "fí": ["sica"],
-        "fi": ["sica"],
-        "rá": ["pido"],
-        "ra": ["pido"],
-        "cére": ["bro"],
-        "cere": ["bro"],
-        "conse": ["guir"],
-        "sozin": ["has"],
-    }
-
-    for a, finais in fragmentos.items():
-        for b in finais:
-            texto = re.sub(rf"\b{a}\s+{b}\b", a + b, texto, flags=re.I)
-            texto = re.sub(rf"\b{a}\s*-\s*{b}\b", a + b, texto, flags=re.I)
-
-    # Pronome com hífen
-    texto = re.sub(r"\b([A-Za-zÀ-ÿ]+)\s*-\s*(se|me|te|lhe|nos|vos)\b", r"\1-\2", texto, flags=re.I)
-
-    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
-    texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"\s+", " ", texto)
-    texto = limpar_quebras_calibre_texto(texto)
-    return texto.strip()
-
-
-def limpeza_final_por_blocos_calibre(soup):
-    """
-    Passada final segura no HTML já traduzido.
-    Evita recursão: só mexe em tags simples de texto direto.
-    Não mexe em DIVs grandes, não mexe em blocos com filhos complexos.
-    """
-    tags_seguras = soup.find_all(["p", "li", "blockquote", "h1", "h2", "h3", "h4"])
-
-    for tag in tags_seguras:
-        try:
-            if tag.name in ["script", "style", "code", "pre", "head", "title"]:
-                continue
-
-            if tag.find(["img", "svg", "math", "table", "ul", "ol"]):
-                continue
-
-            # Se tem muitos filhos/tags internas, não mexe para não quebrar EPUB.
-            filhos_tags = tag.find_all(True, recursive=False)
-            if len(filhos_tags) > 3:
-                continue
-
-            original = tag.get_text(" ", strip=True)
-            if not original or len(original) > 1200:
-                continue
-
-            limpo = limpar_quebras_calibre_texto(original)
-
-            if limpo and limpo != original:
-                tag.clear()
-                tag.append(NavigableString(limpo))
-
-        except Exception:
-            continue
 
     return soup
 
@@ -889,7 +803,21 @@ def limpar_texto_pre_traducao(texto):
     Limpeza ANTES da tradução, para imitar melhor o comportamento do Calibre:
     remove hifenização falsa e espaços quebrados antes de enviar ao Google.
     """
-    return limpar_quebras_calibre_texto(texto)
+    if not texto:
+        return texto
+
+    texto = str(texto)
+    texto = texto.replace("\u00ad", "")
+    texto = texto.replace("‐", "-").replace("‑", "-")
+
+    texto = re.sub(
+        r"([A-Za-zÀ-ÿ]{2,})-\s+([a-záàâãéêíóôõúç]{2,})",
+        r"\1\2",
+        texto
+    )
+
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
 
 
 def bloco_traduzivel(tag):
@@ -1018,12 +946,6 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
                 erros.append(erro)
 
     soup = limpar_lixo_tecnico_soup(soup)
-
-    try:
-        soup = limpeza_final_por_blocos_calibre(soup)
-    except Exception:
-        pass
-
     html_final = str(soup)
     return html_final, alterados, erros
 
