@@ -174,16 +174,13 @@ def revisar_texto_final(texto):
     texto = texto.replace("&#39;", "'")
     texto = texto.replace("&amp;", "&")
 
-    texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])", r"\1 \2", texto)
-
     correcoes = {
         "deTODOS": "de TODOS",
         "de TODOS.Cada": "de TODOS. Cada",
         "TODOS.Cada": "TODOS. Cada",
-        "Cada persona": "Cada persona",
         "paraa": "para a",
-        "para aNo": "para a No",
-        "para aNa": "para a Na",
+        "paraaNo": "para a No",
+        "paraaNa": "para a Na",
         "passaEm": "passa em",
         "se passaEm": "se passa em",
         "completaincluindo": "completa incluindo",
@@ -198,14 +195,64 @@ def revisar_texto_final(texto):
         "naA": "na A",
         "emA": "em A",
         "deA": "de A",
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
+        "nesseambiente": "nesse ambiente",
+        "quememória": "que memória",
+        "quememoria": "que memória",
+        "caralhoquememória": "caralho, que memória",
+        "caralhoquememoria": "caralho, que memória",
+        "monitorese": "monitores e",
+        "perguntase": "pergunta se",
+        "resolvê-loAgora": "resolvê-lo. Agora",
+        "resolveloAgora": "resolvê-lo. Agora",
+        "seunúmero": "seu número",
+        "seunumero": "seu número",
+        "minhatristeza": "minha tristeza",
+        "ignorá-lasMAS": "ignorá-las. MAS",
+        "ignora-lasMAS": "ignorá-las. MAS",
+        "bemEspero": "bem? Espero",
+        "bem?Espero": "bem? Espero",
+        "físicasem": "física. Sem",
+        "fisicasem": "física. Sem",
+        "físicaSem": "física. Sem",
+        "semviolência": "sem violência",
+        "semviolencia": "sem violência",
+        "ok,tudo": "Ok, tudo",
+        "Ok,tudo": "Ok, tudo",
+        "eununcadeixarei": "eu nunca deixarei",
     }
 
     for errado, certo in correcoes.items():
         texto = texto.replace(errado, certo)
 
-    texto = re.sub(r"\b([a-záàâãéêíóôõúç]{3,})([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})\b", r"\1 \2", texto)
+    texto = re.sub(
+        r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
+        r"\1 \2",
+        texto
+    )
+
+    palavras_comuns = [
+        "que", "quando", "porque", "mas", "então", "agora", "aqui", "ali",
+        "com", "sem", "para", "pela", "pelo", "nesse", "nessa", "naquele",
+        "naquela", "minha", "meu", "sua", "seu", "todos", "todas", "memória",
+        "memoria", "lembrança", "quarto", "casa", "telefone", "mensagem",
+        "pergunta", "resposta", "espero", "preciso", "violência", "violencia",
+        "física", "fisica", "incluindo", "experiência", "experiencia",
+    ]
+
+    for palavra in palavras_comuns:
+        texto = re.sub(
+            rf"([a-záàâãéêíóôõúç]{{3,}})({palavra})\b",
+            r"\1 \2",
+            texto,
+            flags=re.IGNORECASE,
+        )
+
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
     texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([a-záàâãéêíóôõúç])([“\"])", r"\1 \2", texto)
+    texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
     texto = re.sub(r"\s+", " ", texto)
 
     return texto.strip()
@@ -215,11 +262,15 @@ def texto_sujo(texto):
     if not texto:
         return True
 
-    t = str(texto).lower().strip()
+    t_original = str(texto).strip()
+    t = t_original.lower()
+    compacto = re.sub(r"[\s\"'<>/\\:;,.()-]+", "", t)
 
     sujeiras = [
-        "xml version", "encoding=", "utf-8", "<?xml",
+        "xml version", "encoding=", "<?xml",
         "<html", "xmlns", "doctype", "{{id_",
+        "html public", "xhtml 1.1", "xhtml11.dtd",
+        "w3.org/tr/xhtml11/dtd", "w3c//dtd",
     ]
 
     if t in ["html", "body", "head"]:
@@ -229,14 +280,22 @@ def texto_sujo(texto):
         if s in t:
             return True
 
+    if (
+        "htmlpublic" in compacto
+        or "w3cdtdxhtml" in compacto
+        or "xhtml11dtd" in compacto
+        or "w3orgtrxhtml11dtd" in compacto
+    ):
+        return True
+
     return False
 
 
 
-def parece_so_nome_proprio(texto):
+def parece_nome_proprio_ou_lugar(texto):
     """
-    Usado apenas para NÃO mandar nomes próprios para o ponto de atenção.
-    Não interfere na tradução.
+    Usado SOMENTE para não colocar nomes próprios/cidades/países/marcas no ponto de atenção.
+    Não mexe na tradução.
     """
     if not texto:
         return False
@@ -250,14 +309,28 @@ def parece_so_nome_proprio(texto):
 
     palavras = t.split()
 
-    if len(palavras) > 6:
+    if len(palavras) > 7:
         return False
 
     conectores = {
         "de", "da", "do", "dos", "das",
         "van", "von", "del", "di", "la", "le",
-        "of", "the"
+        "of", "the", "and", "y", "e"
     }
+
+    comuns_inicio_frase = {
+        "The", "And", "But", "For", "This", "That", "There", "Then", "When",
+        "Where", "What", "Why", "How", "He", "She", "They", "We", "You", "I",
+        "A", "An", "In", "On", "At", "To", "From", "With", "Without",
+        "Chapter", "Prologue", "Epilogue", "Cover", "Dedication"
+    }
+
+    palavras_reais = [p for p in palavras if p.lower() not in conectores]
+    if not palavras_reais:
+        return False
+
+    if len(palavras_reais) == 1 and palavras_reais[0] in comuns_inicio_frase:
+        return False
 
     for p in palavras:
         pl = p.lower()
@@ -265,7 +338,7 @@ def parece_so_nome_proprio(texto):
         if pl in conectores:
             continue
 
-        if re.match(r"^[A-Z]{2,6}$", p):
+        if re.match(r"^[A-Z]{2,8}$", p):
             continue
 
         if re.match(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-Za-zÀ-ÿ'’\-]{1,}$", p):
@@ -279,22 +352,28 @@ def parece_so_nome_proprio(texto):
     return True
 
 
-def limpar_lixo_bruto_html(html):
+def limpar_lixo_tecnico_bruto_html(html):
     """
-    Remove somente DOCTYPE/XML/DTD quebrado que aparece como texto.
-    Não mexe na lógica de tradução.
+    Remove somente lixo técnico de EPUB quebrado, antes do BeautifulSoup.
+    Não altera texto de história e não altera a lógica de tradução.
     """
     if not html:
         return html
 
     html = re.sub(r"<\?xml[^>]*\?>", "", html, flags=re.I | re.S)
-    html = re.sub(r"<!DOCTYPE[^>]*>", "", html, flags=re.I | re.S)
+    html = re.sub(r"<!DOCTYPE[^>]*(?:>|$)", "", html, flags=re.I | re.S)
 
+    # DTD solto como texto, inclusive com espaços/quebras estranhas.
     html = re.sub(
-        r'html\s+PUBLIC\s+"-//W3C//DTD\s+XHTML\s+1\.1//EN"\s+"https?://www\.w3\.org/TR/xhtml11/DTD/xhtml11\.dtd"',
+        r"(?is)\bhtml\s+PUBLIC\s*[\"']?\s*-\s*//\s*W3C\s*//\s*DTD\s+XHTML\s+1\.1\s*//\s*EN\s*[\"']?\s*[\"']?\s*https?\s*:\s*/\s*/\s*www\s*\.?\s*w3\s*\.?\s*org\s*/\s*TR\s*/\s*xhtml11\s*/\s*DTD\s*/\s*xhtml11\s*\.?\s*dtd\s*[\"']?",
         "",
         html,
-        flags=re.I | re.S
+    )
+
+    html = re.sub(
+        r"(?is)\bhtml\s+PUBLIC\s*[\"']?\s*-\s*//\s*W3C\s*//\s*DTD\s+XHTML\s+1\.1\s*//\s*EN\s*[\"']?",
+        "",
+        html,
     )
 
     return html
@@ -302,22 +381,20 @@ def limpar_lixo_bruto_html(html):
 
 def limpar_lixo_tecnico_soup(soup):
     """
-    Remove lixo técnico visível, sem mexer em style/head/CSS real.
+    Remove lixo técnico visível já dentro do BeautifulSoup.
+    Não mexe em <style>, <head>, CSS real, classes ou layout.
     """
-    padrao = re.compile(
-        r'html\s+PUBLIC|DOCTYPE|xhtml\s*1\.1|xhtml11\.dtd|'
-        r'w3\.org/TR/xhtml11/DTD|W3C//DTD',
-        re.I | re.S
-    )
-
     for node in list(soup.find_all(string=True)):
         try:
             if isinstance(node, (Comment, Doctype, Declaration, ProcessingInstruction)):
                 node.extract()
                 continue
 
-            texto = str(node).strip()
-            if not texto:
+            texto = str(node)
+            limpo = re.sub(r"\s+", " ", texto).strip()
+            compacto = re.sub(r"[\s\"'<>/\\:;,.()-]+", "", limpo).lower()
+
+            if not limpo:
                 continue
 
             parent = node.parent
@@ -326,11 +403,19 @@ def limpar_lixo_tecnico_soup(soup):
             if parent_name in ["style", "script", "head", "meta", "link", "title"]:
                 continue
 
-            if padrao.search(texto):
+            if (
+                "htmlpublic" in compacto
+                or "w3cdtdxhtml" in compacto
+                or "xhtml11dtd" in compacto
+                or "w3orgtrxhtml11dtd" in compacto
+                or re.search(r"\bhtml\s+PUBLIC\b", limpo, flags=re.I)
+                or re.search(r"\bXHTML\s+1\.1\b", limpo, flags=re.I)
+                or re.search(r"\bxhtml11\s*\.?\s*dtd\b", limpo, flags=re.I)
+            ):
                 node.extract()
                 continue
 
-            if texto.lower() == "cover":
+            if limpo.lower() == "cover":
                 node.replace_with("Capa")
 
         except Exception:
@@ -592,7 +677,7 @@ def traduzir_bloco_sync(item):
                 or palavra_grudada
                 or site_sobrou
                 or texto_igual_original
-            ) and not parece_so_nome_proprio(texto_final):
+            ) and not parece_nome_proprio_ou_lugar(texto_final):
 
                 erros.append({
                     "bloco": bloco_id,
@@ -712,26 +797,109 @@ async def traduzir_blocos(blocos, mecanismo, workers):
     return resultados
 
 
-async def traduzir_html(html, mecanismo, arquivo_nome=""):
-    html = limpar_lixo_bruto_html(html)
-    soup = BeautifulSoup(html, "html.parser")
-    soup = limpar_lixo_tecnico_soup(soup)
-    capitulo = contexto_capitulo(soup, arquivo_nome)
 
-    nos = []
+def limpar_texto_pre_traducao(texto):
+    """
+    Limpeza ANTES da tradução, para imitar melhor o comportamento do Calibre:
+    remove hifenização falsa e espaços quebrados antes de enviar ao Google.
+    """
+    if not texto:
+        return texto
+
+    texto = str(texto)
+    texto = texto.replace("\u00ad", "")
+    texto = texto.replace("‐", "-").replace("‑", "-")
+
+    texto = re.sub(
+        r"([A-Za-zÀ-ÿ]{2,})-\s+([a-záàâãéêíóôõúç]{2,})",
+        r"\1\2",
+        texto
+    )
+
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
+def bloco_traduzivel(tag):
+    if not tag or not getattr(tag, "name", None):
+        return False
+
+    if tag.name in ["script", "style", "code", "pre", "head", "meta", "link", "title"]:
+        return False
+
+    if tag.find(["img", "svg", "math"]):
+        return False
+
+    if tag.find(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"]):
+        return False
+
+    texto = tag.get_text(" ", strip=True)
+
+    if not texto or len(texto.strip()) < 2:
+        return False
+
+    if texto_sujo(texto):
+        return False
+
+    if not re.search(r"[A-Za-z]", texto):
+        return False
+
+    return True
+
+
+def coletar_blocos_texto(soup):
+    candidatos = soup.find_all(["p", "div", "span", "li", "blockquote", "h1", "h2", "h3", "h4"])
+    blocos = []
     contador = 1
+
+    for tag in candidatos:
+        if not bloco_traduzivel(tag):
+            continue
+
+        texto = limpar_texto_pre_traducao(tag.get_text(" ", strip=True))
+
+        if not texto or len(texto) < 2:
+            continue
+
+        blocos.append((contador, tag, texto))
+        contador += 1
+
+    if blocos:
+        return blocos
 
     for node in soup.find_all(string=True):
         if not texto_visivel(node):
             continue
 
-        texto = str(node)
+        texto = limpar_texto_pre_traducao(str(node))
 
         if len(texto.strip()) < 2:
             continue
 
-        nos.append((contador, node, texto))
+        blocos.append((contador, node, texto))
         contador += 1
+
+    return blocos
+
+
+def substituir_texto_no_item(item_html, texto_final):
+    if hasattr(item_html, "clear") and hasattr(item_html, "append"):
+        item_html.clear()
+        item_html.append(NavigableString(texto_final))
+    else:
+        item_html.replace_with(NavigableString(texto_final))
+
+
+async def traduzir_html(html, mecanismo, arquivo_nome=""):
+    html = limpar_lixo_tecnico_bruto_html(html)
+    soup = BeautifulSoup(html, "html.parser")
+    soup = limpar_lixo_tecnico_soup(soup)
+    capitulo = contexto_capitulo(soup, arquivo_nome)
+
+    # NOVA LÓGICA DE TESTE:
+    # Traduz por blocos visuais inteiros, parecido com o Calibre.
+    # Isso evita traduzir pedaços soltos de spans e reduz palavras coladas.
+    nos = coletar_blocos_texto(soup)
 
     if not nos:
         return str(soup), 0, []
@@ -760,11 +928,11 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             continue
 
         for item, texto_traduzido in zip(bloco, partes_traduzidas):
-            _, node, original = item
+            _, node_or_tag, original = item
 
             if texto_traduzido and texto_traduzido.strip():
                 texto_final = revisar_texto_final(texto_traduzido)
-                node.replace_with(texto_final)
+                substituir_texto_no_item(node_or_tag, texto_final)
 
                 if texto_final.strip() != original.strip():
                     alterados += 1
@@ -773,10 +941,10 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
             if texto_sujo(erro.get("texto", "")):
                 continue
 
-            erro["capitulo"] = capitulo
-            erros.append(erro)
+            if not parece_nome_proprio_ou_lugar(erro.get("texto", "")):
+                erro["capitulo"] = capitulo
+                erros.append(erro)
 
-    # Limpeza final somente de DOCTYPE/DTD visível.
     soup = limpar_lixo_tecnico_soup(soup)
     html_final = str(soup)
     return html_final, alterados, erros
@@ -1088,84 +1256,210 @@ def salvar_log(nome_base, erros):
     return caminho
 
 
-async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True):
-    """
-    MODO PRESERVAR ORIGINAL:
-    Não usa epub.write_epub para salvar o livro inteiro, porque isso reescreve o EPUB
-    e pode apagar <head>, links CSS, classes e estética original.
 
-    Aqui o bot copia o EPUB original e troca somente o conteúdo dos arquivos HTML/XHTML.
-    Assim as bolhas de celular, centralização, CSS e estrutura ficam muito mais parecidos
-    com o Calibre/original.
-    """
+def _normalizar_zip_path(caminho):
+    return str(caminho).replace("\\", "/").lstrip("/")
+
+
+def _encontrar_opf_no_epub(arquivos):
+    container_path = "META-INF/container.xml"
+
+    if container_path not in arquivos:
+        return None
+
+    try:
+        soup = BeautifulSoup(arquivos[container_path].decode("utf-8", errors="ignore"), "xml")
+        rootfile = soup.find("rootfile")
+        if rootfile and rootfile.get("full-path"):
+            return _normalizar_zip_path(rootfile.get("full-path"))
+    except Exception:
+        return None
+
+    return None
+
+
+def atualizar_titulo_epub_zip(arquivos, titulo_final):
+    opf_path = _encontrar_opf_no_epub(arquivos)
+
+    if not opf_path or opf_path not in arquivos:
+        return arquivos
+
+    try:
+        soup = BeautifulSoup(arquivos[opf_path].decode("utf-8", errors="ignore"), "xml")
+        titulo_limpo = Path(titulo_final).stem
+
+        title_tag = soup.find("dc:title")
+        if title_tag:
+            title_tag.string = titulo_limpo
+        else:
+            metadata = soup.find("metadata")
+            if metadata:
+                novo_title = soup.new_tag("dc:title")
+                novo_title.string = titulo_limpo
+                metadata.append(novo_title)
+
+        arquivos[opf_path] = str(soup).encode("utf-8")
+
+    except Exception as erro:
+        print(f"⚠️ Não consegui renomear título interno: {erro}")
+
+    return arquivos
+
+
+def adicionar_pagina_marca_zip(arquivos):
+    if not MARCA_IMAGEM.exists():
+        return arquivos
+
+    opf_path = _encontrar_opf_no_epub(arquivos)
+
+    if not opf_path or opf_path not in arquivos:
+        return arquivos
+
+    try:
+        opf_dir = str(Path(opf_path).parent).replace("\\", "/")
+        if opf_dir == ".":
+            opf_dir = ""
+
+        pagina_rel = "alma_scriptum.xhtml"
+        imagem_rel = "images/alma_scriptum.png"
+
+        pagina_path = _normalizar_zip_path(f"{opf_dir}/{pagina_rel}" if opf_dir else pagina_rel)
+        imagem_path = _normalizar_zip_path(f"{opf_dir}/{imagem_rel}" if opf_dir else imagem_rel)
+
+        pagina_html = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            '<head><title>Alma Scriptum</title></head>\n'
+            '<body style="margin:0; padding:0; background:#ffffff;">\n'
+            '<div style="text-align:center; margin:0; padding:0;">\n'
+            f'<img src="{imagem_rel}" alt="Alma Scriptum" '
+            'style="width:100%; max-width:900px; display:block; margin:0 auto;" />\n'
+            '</div>\n'
+            '</body>\n'
+            '</html>\n'
+        )
+
+        soup = BeautifulSoup(arquivos[opf_path].decode("utf-8", errors="ignore"), "xml")
+        manifest = soup.find("manifest")
+        spine = soup.find("spine")
+
+        if manifest:
+            for old in manifest.find_all("item"):
+                if old.get("id") in ["alma_scriptum_page", "alma_scriptum_img"]:
+                    old.decompose()
+
+            item_img = soup.new_tag("item")
+            item_img["id"] = "alma_scriptum_img"
+            item_img["href"] = imagem_rel
+            item_img["media-type"] = "image/png"
+            manifest.append(item_img)
+
+            item_page = soup.new_tag("item")
+            item_page["id"] = "alma_scriptum_page"
+            item_page["href"] = pagina_rel
+            item_page["media-type"] = "application/xhtml+xml"
+            manifest.append(item_page)
+
+        if spine:
+            for old in spine.find_all("itemref"):
+                if old.get("idref") == "alma_scriptum_page":
+                    old.decompose()
+
+            itemref = soup.new_tag("itemref")
+            itemref["idref"] = "alma_scriptum_page"
+
+            refs = spine.find_all("itemref")
+            if refs:
+                refs[0].insert_after(itemref)
+            else:
+                spine.append(itemref)
+
+        arquivos[opf_path] = str(soup).encode("utf-8")
+        arquivos[pagina_path] = pagina_html.encode("utf-8")
+        arquivos[imagem_path] = MARCA_IMAGEM.read_bytes()
+
+    except Exception as erro:
+        print(f"⚠️ Não consegui adicionar a marca no EPUB preservado: {erro}")
+
+    return arquivos
+
+
+async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True, nome_original=None):
     erros = []
     traduzidos = 0
 
     extensoes_html = (".xhtml", ".html", ".htm")
 
     with zipfile.ZipFile(str(entrada), "r") as zip_in:
-        nomes = zip_in.namelist()
+        nomes_originais = zip_in.namelist()
+        arquivos = {nome: zip_in.read(nome) for nome in nomes_originais}
 
-        documentos = [
-            nome for nome in nomes
-            if nome.lower().endswith(extensoes_html)
-            and not nome.lower().endswith("nav.xhtml")
-        ]
+    documentos = [
+        nome for nome in nomes_originais
+        if nome.lower().endswith(extensoes_html)
+        and not nome.lower().endswith("nav.xhtml")
+    ]
 
-        total = len(documentos) or 1
+    total = len(documentos) or 1
 
-        with zipfile.ZipFile(str(saida), "w", compression=zipfile.ZIP_DEFLATED) as zip_out:
-            for nome in nomes:
-                dados = zip_in.read(nome)
+    for i, nome in enumerate(documentos, start=1):
+        if user_id in cancelamentos:
+            raise Exception("Tradução cancelada.")
 
-                if nome in documentos:
-                    i = documentos.index(nome) + 1
+        try:
+            conteudo = arquivos[nome].decode("utf-8", errors="ignore")
 
-                    if user_id in cancelamentos:
-                        raise Exception("Tradução cancelada.")
+            if conteudo.strip():
+                traduzido, alterados, erros_html = await traduzir_html(
+                    conteudo,
+                    mecanismo,
+                    nome,
+                )
 
-                    try:
-                        conteudo = dados.decode("utf-8", errors="ignore")
+                for erro in erros_html:
+                    erro["arquivo"] = f"{i}/{total}"
+                    erros.append(erro)
 
-                        if conteudo.strip():
-                            traduzido, alterados, erros_html = await traduzir_html(
-                                conteudo,
-                                mecanismo,
-                                nome,
-                            )
+                if traduzido and traduzido != conteudo:
+                    arquivos[nome] = traduzido.encode("utf-8")
 
-                            for erro in erros_html:
-                                erro["arquivo"] = f"{i}/{total}"
-                                erros.append(erro)
+                if alterados > 0:
+                    traduzidos += 1
 
-                            # Grava se a limpeza removeu DOCTYPE/DTD,
-                            # mas a tradução continua usando a lógica original.
-                            if traduzido and traduzido != conteudo:
-                                dados = traduzido.encode("utf-8")
+                print(f"✅ Traduzido {i}/{total}: {nome}")
 
-                            if alterados > 0:
-                                traduzidos += 1
+        except Exception as erro:
+            erros.append({
+                "arquivo": f"{i}/{total}",
+                "capitulo": "Capítulo não identificado",
+                "bloco": "-",
+                "trecho_num": "-",
+                "motivo": str(erro)[:120],
+                "texto": "erro geral no arquivo interno",
+            })
+            print(f"⚠️ Arquivo interno {i}/{total}: {str(erro)[:120]}")
 
-                            print(f"✅ Traduzido {i}/{total}: {nome}")
-
-                    except Exception as erro:
-                        erros.append({
-                            "arquivo": f"{i}/{total}",
-                            "capitulo": "Capítulo não identificado",
-                            "bloco": "-",
-                            "trecho_num": "-",
-                            "motivo": str(erro)[:120],
-                            "texto": "erro geral no arquivo interno",
-                        })
-                        print(f"⚠️ Arquivo interno {i}/{total}: {str(erro)[:120]}")
-
-                    await atualizar_progresso(mensagem, mecanismo, i, total, erros)
-                    await asyncio.sleep(REQUEST_INTERVAL)
-
-                zip_out.writestr(nome, dados)
+        await atualizar_progresso(mensagem, mecanismo, i, total, erros)
+        await asyncio.sleep(REQUEST_INTERVAL)
 
     if traduzidos == 0:
         raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
+
+    nome_base_para_titulo = nome_original or Path(entrada).name
+    titulo_final = criar_nome_final(nome_base_para_titulo)
+    arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
+
+    if adicionar_marca:
+        arquivos = adicionar_pagina_marca_zip(arquivos)
+
+    nomes_finais = list(nomes_originais)
+    for nome in arquivos:
+        if nome not in nomes_finais:
+            nomes_finais.append(nome)
+
+    with zipfile.ZipFile(str(saida), "w", compression=zipfile.ZIP_DEFLATED) as zip_out:
+        for nome in nomes_finais:
+            zip_out.writestr(nome, arquivos[nome])
 
     return erros
 
@@ -1292,6 +1586,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user_id,
             mensagem=mensagem,
             adicionar_marca=usuarios[user_id]["marca"],
+            nome_original=documento.file_name,
         )
 
         try:
