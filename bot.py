@@ -1370,9 +1370,10 @@ def adicionar_pagina_marca_zip(arquivos):
 
             refs = spine.find_all("itemref")
 
-            # coloca a página da marca logo no começo
+            # coloca a página da marca depois do primeiro item do spine
+            # para não quebrar a abertura/capa original do EPUB
             if refs:
-                refs[0].insert_before(itemref)
+                refs[0].insert_after(itemref)
             else:
                 spine.append(itemref)
 
@@ -1452,11 +1453,11 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
     arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
 
     if adicionar_marca:
-    try:
-        arquivos = adicionar_pagina_marca_zip(arquivos)
-        print("✅ Página Alma Scriptum adicionada.")
-    except Exception as erro:
-        print("⚠️ Erro ao adicionar marca:", erro)
+        try:
+            arquivos = adicionar_pagina_marca_zip(arquivos)
+            print("✅ Página Alma Scriptum adicionada.")
+        except Exception as erro:
+            print("⚠️ Erro ao adicionar marca:", erro)
 
     nomes_finais = list(nomes_originais)
     for nome in arquivos:
