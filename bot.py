@@ -1,40 +1,31 @@
 import os
 import re
 import uuid
-import time
 import json
-import shutil
-import subprocess
+import zipfile
+import time
+import html as html_lib
 import asyncio
+import urllib.parse
+import urllib.request
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
-import requests
 from bs4 import BeautifulSoup, NavigableString
 from ebooklib import epub, ITEM_DOCUMENT, ITEM_IMAGE
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InputFile,
-)
-
-from telegram.error import TimedOut, NetworkError
-
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-MAX_GEMINI_TRECHOS = int(os.getenv("MAX_GEMINI_TRECHOS", "18"))
-GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "12"))
 
 IDS_LIBERADOS = {
     8672397104,
@@ -45,39 +36,88 @@ BASE_DIR = Path(__file__).parent
 TEMP_DIR = BASE_DIR / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
+MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
+
 usuarios = {}
 cancelamentos = set()
 
+MERGE_LENGTH = 1800
+REQUEST_ATTEMPTS = 1
+REQUEST_TIMEOUT = 15
+REQUEST_INTERVAL = 0.005
 
-def autorizado(user_id):
+CONFIGS = {
+    "google_new": {"nome": "🌐 Google Free New", "workers": 10},
+    "google_html": {"nome": "📄 Google Free HTML", "workers": 6},
+    "google_old": {"nome": "🕰️ Google Free Old", "workers": 4},
+}
+
+SEP_TEMPLATE = "{{{{id_{}}}}}"
+
+
+def usuario_liberado(user_id):
     return user_id in IDS_LIBERADOS
 
 
-def painel_principal():
+def limpar_nome(nome):
+    return re.sub(r"[^a-zA-Z0-9_.-]", "_", nome)
+
+
+def criar_nome_final(nome_original):
+    nome = Path(nome_original).stem
+
+    nome = nome.replace("_", " ")
+    nome = nome.replace("-", " ")
+    nome = re.sub(r"\s*\([^)]*\)", " ", nome)
+
+    sujeiras = [
+        r"z[\s\-_]*library[\s\._\-]*sk",
+        r"z[\s\-_]*lib[\s\._\-]*sk",
+        r"z[\s\-_]*lib",
+        r"1lib[\s\._\-]*sk",
+        r"1lib",
+        r"sk",
+        r"oceanofpdf[\s\._\-]*com",
+        r"oceanofpdf",
+        r"ocean pdf",
+        r"pt[\s\-_]*br",
+        r"ptbr",
+        r"br[\s\-_]*pt[\s\-_]*br",
+        r"\[pt-br\]",
+        r"alma scriptum translate",
+        r"alma scriptum",
+        r"translate",
+        r"traduzido",
+        r"revisado",
+    ]
+
+    for item in sujeiras:
+        nome = re.sub(item, " ", nome, flags=re.IGNORECASE)
+
+    nome = re.sub(r"[,;:]+", " ", nome)
+    nome = re.sub(r"\s+", " ", nome).strip()
+
+    if not nome:
+        nome = "Livro"
+
+    return f"{nome} - [PT-BR] - Alma Scriptum.epub"
+
+
+def nome_mecanismo(mecanismo):
+    return CONFIGS.get(mecanismo, CONFIGS["google_new"])["nome"]
+
+
+def teclado_principal():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛠 Revisar / Limpar EPUB", callback_data="modo_revisar")],
-        [InlineKeyboardButton("🤖 Revisar com Gemini", callback_data="modo_gemini_menu")],
-        [InlineKeyboardButton("🖼 Traduzir / trocar imagens", callback_data="modo_imagens")],
-        [InlineKeyboardButton("🖼 Editar capa", callback_data="modo_capa")],
-        [InlineKeyboardButton("🔄 Conversor Alma Scriptum", callback_data="modo_conversor")],
-        [InlineKeyboardButton("❌ Cancelar", callback_data="cancelar")],
-    ])
-
-
-def painel_conversor():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📘 EPUB → PDF", callback_data="conv_epub_pdf")],
-        [InlineKeyboardButton("📄 PDF → EPUB", callback_data="conv_pdf_epub")],
-        [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")],
-    ])
-
-
-def painel_gemini():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🟢 Revisão leve", callback_data="gemini_leve")],
-        [InlineKeyboardButton("🟡 Revisão média", callback_data="gemini_media")],
-        [InlineKeyboardButton("🔴 Revisão pesada", callback_data="gemini_pesada")],
-        [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")],
+        [InlineKeyboardButton("🌐 Google New", callback_data="set_google_new")],
+        [
+            InlineKeyboardButton("📄 Google HTML", callback_data="set_google_html"),
+            InlineKeyboardButton("🕰️ Google Old", callback_data="set_google_old"),
+        ],
+        [
+            InlineKeyboardButton("🖼️ Marca", callback_data="marca"),
+            InlineKeyboardButton("🛑 Cancelar", callback_data="cancelar"),
+        ],
     ])
 
 
@@ -87,49 +127,14 @@ def barra_progresso(porcentagem):
     return "🟩" * cheios + "⬜" * vazios
 
 
-async def atualizar_carregamento(mensagem, titulo, porcentagem, status):
-    try:
-        await mensagem.edit_text(
-            f"{titulo}\n\n"
-            f"📊 Progresso: {porcentagem}%\n"
-            f"{barra_progresso(porcentagem)}\n\n"
-            f"{status}"
-        )
-    except Exception:
-        pass
+def texto_curto(texto, limite=420):
+    texto = re.sub(r"\s+", " ", str(texto)).strip()
+    if len(texto) > limite:
+        return texto[:limite].strip() + "..."
+    return texto
 
 
-def limpar_nome(nome):
-    nome = Path(nome).stem
-    nome = nome.replace("_", " ").replace("-", " ")
-    nome = re.sub(r"\s*\([^)]*\)", " ", nome)
-
-    sujeiras = [
-        r"oceanofpdf\.com", r"oceanofpdf", r"ocean of pdf", r"oceanpdf",
-        r"z-library\.sk", r"z-library", r"zlib", r"z-lib",
-        r"1lib\.sk", r"1lib", r"library",
-        r"traduzido", r"ptbr", r"pt-br", r"\[pt-br\]",
-        r"alma scriptum", r"studio",
-    ]
-
-    for s in sujeiras:
-        nome = re.sub(s, " ", nome, flags=re.I)
-
-    nome = re.sub(r"[,;:]+", " ", nome)
-    nome = re.sub(r"\s+", " ", nome).strip()
-
-    return nome or "Livro"
-
-
-def nome_epub(nome):
-    return f"{limpar_nome(nome)} - Studio - Alma Scriptum.epub"
-
-
-def nome_pdf(nome):
-    return f"{limpar_nome(nome)} - PDF - Alma Scriptum.pdf"
-
-
-def remover_sujeiras_texto(texto):
+def substituir_sites_por_marca(texto):
     if not texto:
         return texto
 
@@ -139,6 +144,7 @@ def remover_sujeiras_texto(texto):
         r"OceanPDF\.com",
         r"oceanofpdf\.com",
         r"oceanofpdf",
+        r"OceanofPDF",
         r"Ocean Of PDF",
         r"Ocean PDF",
         r"z-library\.sk",
@@ -151,1272 +157,1284 @@ def remover_sujeiras_texto(texto):
     ]
 
     for p in padroes:
-        texto = re.sub(p, "", texto, flags=re.I)
+        texto = re.sub(p, "", texto, flags=re.IGNORECASE)
 
-    correcoes_fixas = {
-        "deTODOS.Cada": "de TODOS. Cada",
-        "deTODOS": "de TODOS",
-        "TODOS.Cada": "TODOS. Cada",
-        "paraaNola": "para a Nola",
-        "paraaNo": "para a No",
-        "daA Saga": "da Saga",
-        "umaexperiência": "uma experiência",
-        "completaincluindo": "completa incluindo",
-        "sitewww": "site www",
-        "meu sitewww": "meu site www",
-    }
-
-    for errado, certo in correcoes_fixas.items():
-        texto = texto.replace(errado, certo)
-
-    texto = re.sub(r"\bpara([aA])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]+)", r"para \1 \2", texto)
-    texto = re.sub(r"\bde([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,})", r"de \1", texto)
-    texto = re.sub(r"\bdaA\s+", "da ", texto)
-    texto = re.sub(r"\bdoO\s+", "do ", texto)
-
-    texto = re.sub(
-        r"([a-záàâãéêíóôõúç]{4,})(incluindo|experiência|personagem|história|série|saga|livro)",
-        r"\1 \2",
-        texto,
-        flags=re.I
-    )
-
-    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
-    texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"\s+", " ", texto)
-
+    texto = re.sub(r"\s{2,}", " ", texto)
     return texto.strip()
 
 
-def limpar_texto_inteligente(texto):
-    """
-    Limpeza pesada, mas segura:
-    - remove sites;
-    - junta palavras quebradas por hífen/soft-hyphen;
-    - corrige palavras grudadas comuns;
-    - corrige pedaços quebrados tipo 'lágri mas';
-    - corrige letras sobrando no começo tipo 'TO grito' -> 'O grito'.
-    """
+def revisar_texto_final(texto):
     if not texto:
         return texto
 
-    texto = str(texto)
-    texto = texto.replace("\u00ad", "")  # soft hyphen invisível
-    texto = texto.replace("‐", "-").replace("‑", "-").replace("–", "—")
+    texto = html_lib.unescape(texto)
+    texto = substituir_sites_por_marca(texto)
 
-    # Remove marcas de sites
-    padroes_sites = [
-        r"OceanofPDF\.com", r"OceanOfPDF\.com", r"OceanPDF\.com",
-        r"oceanofpdf\.com", r"oceanofpdf", r"Ocean Of PDF", r"Ocean PDF",
-        r"z-library\.sk", r"z-library", r"zlib", r"1lib\.sk", r"1lib",
-        r"z-lib\.org", r"z-lib",
-    ]
+    texto = texto.replace("&quot;", '"')
+    texto = texto.replace("&#39;", "'")
+    texto = texto.replace("&amp;", "&")
 
-    for p in padroes_sites:
-        texto = re.sub(p, "", texto, flags=re.I)
-
-    # Junta hifenização falsa de quebra de linha: protagonis- ta -> protagonista
-    texto = re.sub(
-        r"([A-Za-zÀ-ÿ]{2,})-\s+([a-záàâãéêíóôõúç]{2,})",
-        r"\1\2",
-        texto
-    )
-
-    # Correções diretas vistas nos EPUBs
     correcoes = {
-        "deTODOS.Cada": "de TODOS. Cada",
         "deTODOS": "de TODOS",
+        "de TODOS.Cada": "de TODOS. Cada",
         "TODOS.Cada": "TODOS. Cada",
-        "processo.A": "processo. A",
-        "trama.Bruxas": "trama. Bruxas",
-        "Sériemas": "Série, mas",
-        "sérieSons": "série Sons",
-        "passaapós": "passa após",
-        "Weaknesseantes": "Weakness e antes",
-        "4Playda": "4Play da",
-        "completaPara": "completa. Para",
-        "umaexperiência": "uma experiência",
-        "cinematográficacompleta": "cinematográfica completa",
-        "completaincluindo": "completa incluindo",
-        "sitewww": "site www",
-        "meu sitewww": "meu site www",
-        "paraaNola": "para a Nola",
+        "paraa": "para a",
         "paraaNo": "para a No",
         "paraaNa": "para a Na",
-        "tambémpara": "também para",
-        "relacionamentoscruciais": "relacionamentos cruciais",
-        "daA Saga": "da Saga",
-        "emesse quarto": "nesse quarto",
-        "emesse qu": "nesse qu",
+        "passaEm": "passa em",
+        "se passaEm": "se passa em",
+        "completaincluindo": "completa incluindo",
+        "incluindoo": "incluindo o",
+        "incluindoa": "incluindo a",
+        "deda": "de da",
+        "dea": "de a",
+        "doa": "do a",
+        "daA": "da A",
+        "doO": "do O",
+        "noA": "no A",
+        "naA": "na A",
+        "emA": "em A",
+        "deA": "de A",
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
+        "nesseambiente": "nesse ambiente",
         "quememória": "que memória",
         "quememoria": "que memória",
         "caralhoquememória": "caralho, que memória",
         "caralhoquememoria": "caralho, que memória",
-        "bemEspero": "bem? Espero",
-        "bem?Espero": "bem? Espero",
-        "físicaSem": "física. Sem",
-        "fisicaSem": "física. Sem",
-        "físicasem": "física. Sem",
-        "fisicasem": "física. Sem",
-        "semviolência": "sem violência",
-        "semviolencia": "sem violência",
+        "monitorese": "monitores e",
+        "perguntase": "pergunta se",
+        "resolvê-loAgora": "resolvê-lo. Agora",
+        "resolveloAgora": "resolvê-lo. Agora",
         "seunúmero": "seu número",
         "seunumero": "seu número",
         "minhatristeza": "minha tristeza",
         "ignorá-lasMAS": "ignorá-las. MAS",
         "ignora-lasMAS": "ignorá-las. MAS",
+        "bemEspero": "bem? Espero",
+        "bem?Espero": "bem? Espero",
+        "físicasem": "física. Sem",
+        "fisicasem": "física. Sem",
+        "físicaSem": "física. Sem",
+        "semviolência": "sem violência",
+        "semviolencia": "sem violência",
+        "ok,tudo": "Ok, tudo",
+        "Ok,tudo": "Ok, tudo",
         "eununcadeixarei": "eu nunca deixarei",
-        "lágri mas": "lágrimas",
-        "lá gri mas": "lágrimas",
-        "lágr i mas": "lágrimas",
-        "gr ito": "grito",
-        "TO grito": "O grito",
-        "TO gr ito": "O grito",
-        "T O grito": "O grito",
-        "memó ria": "memória",
-        "fí sica": "física",
-        "rá pido": "rápido",
-        "cére bro": "cérebro",
-        "conse guir": "conseguir",
-        "sozin has": "sozinhas",
-        "h is tória": "história",
-        "his tória": "história",
     }
 
     for errado, certo in correcoes.items():
         texto = texto.replace(errado, certo)
 
-    # Letras sobrando no começo de frase/trecho por causa de dropcap/OCR:
-    # TO grito -> O grito | T A voz -> A voz
-    texto = re.sub(r"(^|[.!?]\s+)T\s*O\s+([a-záàâãéêíóôõúç])", r"\1O \2", texto)
-    texto = re.sub(r"(^|[.!?]\s+)T\s*A\s+([a-záàâãéêíóôõúç])", r"\1A \2", texto)
-    texto = re.sub(r"(^|[.!?]\s+)T\s+(O|A|Os|As|Eu|Ele|Ela|Meu|Minha)\b", r"\1\2", texto)
-
-    # Junta pedaços quebrados frequentes
-    texto = re.sub(r"\blá\s*gri\s*mas\b", "lágrimas", texto, flags=re.I)
-    texto = re.sub(r"\bgr\s*ito\b", "grito", texto, flags=re.I)
-    texto = re.sub(r"\bmemó\s*ria\b", "memória", texto, flags=re.I)
-    texto = re.sub(r"\bfí\s*sica\b", "física", texto, flags=re.I)
-    texto = re.sub(r"\brá\s*pido\b", "rápido", texto, flags=re.I)
-    texto = re.sub(r"\bcére\s*bro\b", "cérebro", texto, flags=re.I)
-    texto = re.sub(r"\bconse\s*guir\b", "conseguir", texto, flags=re.I)
-    texto = re.sub(r"\bsozin\s*has\b", "sozinhas", texto, flags=re.I)
-    texto = re.sub(r"\bprotagonis\s*ta\b", "protagonista", texto, flags=re.I)
-    texto = re.sub(r"\bhis\s*tória\b", "história", texto, flags=re.I)
-
-    # Separa palavras grudadas com maiúscula: físicaSem, passaEm
     texto = re.sub(
         r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
         r"\1 \2",
         texto
     )
 
-    # Corrige pontuação grudada
-    texto = re.sub(r"([.!?;:])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇA-Za-zÀ-ÿ])", r"\1 \2", texto)
+    palavras_comuns = [
+        "que", "quando", "porque", "mas", "então", "agora", "aqui", "ali",
+        "com", "sem", "para", "pela", "pelo", "nesse", "nessa", "naquele",
+        "naquela", "minha", "meu", "sua", "seu", "todos", "todas", "memória",
+        "memoria", "lembrança", "quarto", "casa", "telefone", "mensagem",
+        "pergunta", "resposta", "espero", "preciso", "violência", "violencia",
+        "física", "fisica", "incluindo", "experiência", "experiencia",
+    ]
 
-    # Separações específicas seguras
-    texto = re.sub(
-        r"\b([a-záàâãéêíóôõúç]{3,})(incluindo|experiência|história|memória|violência|física)\b",
-        r"\1 \2",
-        texto,
-        flags=re.I
-    )
+    for palavra in palavras_comuns:
+        texto = re.sub(
+            rf"([a-záàâãéêíóôõúç]{{3,}})({palavra})\b",
+            r"\1 \2",
+            texto,
+            flags=re.IGNORECASE,
+        )
 
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
-    texto = re.sub(r"\s{2,}", " ", texto)
-
-    # URLs
-    texto = texto.replace("sitewww.", "site www.")
-    texto = texto.replace("www. ", "www.")
-    texto = texto.replace(". com", ".com")
+    texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([a-záàâãéêíóôõúç])([“\"])", r"\1 \2", texto)
+    texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"\s+", " ", texto)
 
     return texto.strip()
 
 
-def texto_suspeito_para_gemini(texto):
+def texto_sujo(texto):
     if not texto:
-        return False
+        return True
 
-    t = str(texto).strip()
+    t = str(texto).lower().strip()
 
-    if len(t) < 8:
-        return False
-
-    # Esses casos precisam de IA porque podem envolver contexto/tradução.
-    padroes = [
-        r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}",
-        r"\b(lá\s*gri\s*mas|gr\s*ito|memó\s*ria|fí\s*sica|rá\s*pido|cére\s*bro|protagonis\s*ta|conse\s*guir)\b",
-        r"\bTO\s+[a-záàâãéêíóôõúç]",
-        r"\b(The|Sons of the Elite|Man's Weakness|Series|Play)\b",
+    sujeiras = [
+        "xml version", "encoding=", "utf-8", "<?xml",
+        "<html", "xmlns", "doctype", "{{id_",
     ]
 
-    for p in padroes:
-        if re.search(p, t, flags=re.I):
-            return True
+    if t in ["html", "body", "head"]:
+        return True
 
-    suspeitas = [
-        "deTODOS", "TODOS.Cada", "completaincluindo",
-        "umaexperiência", "paraaNo", "passaEm",
-        "deda", "dea", "doa", "quememória",
-        "caralhoquememória", "bemEspero", "físicaSem",
-        "semviolência", "lágri mas", "gr ito", "TO grito",
-        "passaapós", "sérieSons", "4Playda",
-    ]
-
-    for item in suspeitas:
-        if item.lower() in t.lower():
+    for s in sujeiras:
+        if s in t:
             return True
 
     return False
 
 
+def resumo_erros(erros, limite=5):
+    if not erros:
+        return ""
+
+    partes = ["\n\n⚠️ Pontos com atenção:"]
+
+    for erro in erros[-limite:]:
+        partes.append(
+            f"\n📁 Arquivo: {erro.get('arquivo', 'não identificado')}\n"
+            f"📖 Capítulo: {erro.get('capitulo', 'Capítulo não identificado')}\n"
+            f"🧩 Trecho: {erro.get('texto', 'não identificado')}\n"
+            f"📝 Motivo: {erro.get('motivo', 'não informado')}"
+        )
+
+    if len(erros) > limite:
+        partes.append(f"\n… +{len(erros) - limite} ponto(s) no log.")
+
+    return "\n".join(partes)
 
 
-def nivel_gemini_atual(user_id=None):
-    if user_id is None:
-        return "leve"
-    return usuarios.get(user_id, {}).get("nivel_gemini", "leve")
+def request_url(url, data=None, headers=None, method="GET"):
+    headers = headers or {}
+
+    if method == "GET":
+        if data:
+            url += "?" + urllib.parse.urlencode(data)
+        req = urllib.request.Request(url, headers=headers, method="GET")
+    else:
+        if isinstance(data, dict):
+            body = urllib.parse.urlencode(data).encode("utf-8")
+        elif isinstance(data, str):
+            body = data.encode("utf-8")
+        else:
+            body = data
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as response:
+        return response.read().decode("utf-8", errors="ignore")
 
 
-def texto_suspeito_para_gemini_nivel(texto, nivel="leve"):
+def google_new_translate(texto):
+    url = "https://translate-pa.googleapis.com/v1/translate"
+    headers = {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/133.0.0.0 Safari/537.36",
+    }
+    data = {
+        "params.client": "gtx",
+        "query.source_language": "en",
+        "query.target_language": "pt",
+        "query.display_language": "pt-BR",
+        "data_types": "TRANSLATION",
+        "key": "AIzaSyDLEeFI5OtFBwYBIoK_jj5m32rZK5CkCXA",
+        "query.text": texto,
+    }
+    resposta = request_url(url, data=data, headers=headers, method="GET")
+    return json.loads(resposta)["translation"]
+
+
+def google_html_translate(texto):
+    url = "https://translate-pa.googleapis.com/v1/translateHtml"
+    headers = {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type": "application/json+protobuf",
+        "X-Goog-Api-Key": "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/133.0.0.0 Safari/537.36",
+    }
+    body = json.dumps([[[texto], "en", "pt"], "wt_lib"])
+    resposta = request_url(url, data=body, headers=headers, method="POST")
+    return json.loads(resposta)[0][0]
+
+
+def google_old_translate(texto):
+    url = "https://translate.googleapis.com/translate_a/single"
+    headers = {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/111.0.0.0 Safari/537.36",
+    }
+    data = {
+        "client": "gtx",
+        "sl": "en",
+        "tl": "pt",
+        "dt": "t",
+        "dj": 1,
+        "q": texto,
+    }
+    method = "GET" if len(texto) <= 1800 else "POST"
+    resposta = request_url(url, data=data, headers=headers, method=method)
+    dados = json.loads(resposta)
+    return "".join(item["trans"] for item in dados["sentences"])
+
+
+def traduzir_google(texto, mecanismo):
+    if mecanismo == "google_html":
+        return google_html_translate(texto)
+    if mecanismo == "google_old":
+        return google_old_translate(texto)
+    return google_new_translate(texto)
+
+
+def ordem_fallback(mecanismo_principal):
+    todos = ["google_new", "google_html", "google_old"]
+    ordem = [mecanismo_principal] + [m for m in todos if m != mecanismo_principal]
+    return ordem
+
+
+def traduzir_com_retry(texto, mecanismo):
+    ultimo_erro = None
+    texto = substituir_sites_por_marca(texto)
+
+    for mecanismo_teste in ordem_fallback(mecanismo):
+        for tentativa in range(REQUEST_ATTEMPTS):
+            try:
+                traducao = traduzir_google(texto, mecanismo_teste)
+
+                if traducao and traducao.strip() and traducao.strip() != texto.strip():
+                    return revisar_texto_final(traducao), None
+
+                ultimo_erro = f"{nome_mecanismo(mecanismo_teste)} voltou igual ao original"
+
+            except Exception as erro:
+                ultimo_erro = f"{nome_mecanismo(mecanismo_teste)}: {str(erro)[:100]}"
+
+            if tentativa < REQUEST_ATTEMPTS - 1:
+                time.sleep(2 + tentativa * 2)
+
+    return revisar_texto_final(texto), ultimo_erro or "falha desconhecida"
+
+
+def traduzir_com_fallback(texto, mecanismo):
+    traducao, erro = traduzir_com_retry(texto, mecanismo)
+
+    if not erro:
+        return traducao, None
+
+    partes = re.split(r"(?<=[.!?])\s+", texto)
+    traduzidas = []
+    falhas = 0
+
+    for parte in partes:
+        if not parte.strip():
+            continue
+
+        t, e = traduzir_com_retry(parte, mecanismo)
+
+        if e:
+            traduzidas.append(revisar_texto_final(parte))
+            falhas += 1
+        else:
+            traduzidas.append(t)
+
+    if falhas:
+        return " ".join(traduzidas), f"{falhas} frase(s) ficaram sem tradução"
+
+    return " ".join(traduzidas), None
+
+
+def criar_sep(i):
+    return SEP_TEMPLATE.format(format(i, "05"))
+
+
+def separar_por_sep(texto, quantidade):
+    partes = [texto]
+
+    for i in range(quantidade - 1):
+        pattern = r"\{\{\s*id\s*_\s*" + format(i, "05") + r"\s*\}\}"
+        novo = []
+
+        for parte in partes:
+            novo.extend(re.split(pattern, parte, maxsplit=1))
+
+        partes = novo
+
+    partes = [
+        re.sub(r"\{\{\s*id\s*_\s*\d+\s*\}\}", "", p).strip()
+        for p in partes
+    ]
+
+    return [p for p in partes if p]
+
+
+def traduzir_bloco_sync(item):
+    bloco_id, textos, mecanismo = item
+
+    textos = [substituir_sites_por_marca(t) for t in textos]
+
+    junto = ""
+
+    for i, texto in enumerate(textos):
+        junto += texto
+
+        if i < len(textos) - 1:
+            junto += "\n\n" + criar_sep(i) + "\n\n"
+
+    traducao, erro = traduzir_com_retry(junto, mecanismo)
+
+    if not erro:
+        partes = separar_por_sep(traducao, len(textos))
+
+        if len(partes) == len(textos):
+            partes = [revisar_texto_final(p) for p in partes]
+            return bloco_id, partes, []
+
+    partes_finais = []
+    erros = []
+
+    for idx, texto in enumerate(textos, start=1):
+
+        if texto_sujo(texto):
+            partes_finais.append(texto)
+            continue
+
+        t, e = traduzir_com_fallback(texto, mecanismo)
+
+        texto_final = revisar_texto_final(t)
+
+        partes_finais.append(texto_final)
+
+        # Só adiciona ponto de atenção
+        # se REALMENTE sobrou problema
+        if e:
+
+            ainda_tem_ingles = bool(re.search(
+                r"\b(the|and|with|you|your|she|he|they|this|that|was|were|have|from|into|would|could|should)\b",
+                texto_final,
+                flags=re.IGNORECASE
+            ))
+
+            palavra_grudada = bool(re.search(
+                r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}",
+                texto_final
+            ))
+
+            site_sobrou = bool(re.search(
+                r"oceanofpdf|z-library|1lib|z-lib",
+                texto_final,
+                flags=re.IGNORECASE
+            ))
+
+            texto_igual_original = (
+                texto_final.strip().lower() ==
+                texto.strip().lower()
+            )
+
+            if (
+                ainda_tem_ingles
+                or palavra_grudada
+                or site_sobrou
+                or texto_igual_original
+            ):
+
+                erros.append({
+                    "bloco": bloco_id,
+                    "trecho_num": idx,
+                    "motivo": "precisa de revisão manual",
+                    "texto": texto_curto(texto_final),
+                })
+
+    return bloco_id, partes_finais, erros
+
+
+def texto_visivel(node):
+    if not isinstance(node, NavigableString):
+        return False
+
+    texto = str(node).strip()
+
     if not texto:
         return False
 
-    t = str(texto).strip()
+    parent = node.parent
 
-    if len(t) < 8:
+    if not parent:
         return False
 
-    # Leve: foco real em palavras quebradas, sem mandar frases normais inteiras para o Gemini.
-    padroes_leve = [
-        r"\b[A-Za-zÀ-ÿ]{2,}\s*-\s+[a-záàâãéêíóôõúç]{2,}\b",
-        r"\b(lá\s*gri\s*mas|gr\s*ito|memó\s*ria|fí\s*sica|rá\s*pido|cére\s*bro|protagonis\s*ta|conse\s*guir|li\s*berdades|algu\s*mas|análi\s*se|lib\s*erdades|histó\s*ria|polí\s*tico)\b",
-        r"\bTO\s+[a-záàâãéêíóôõúç]",
+    if parent.name in ["script", "style", "code", "pre", "head", "meta", "link", "title"]:
+        return False
+
+    if texto_sujo(texto):
+        return False
+
+    if not re.search(r"[A-Za-z]", texto):
+        return False
+
+    return True
+
+
+def parece_capitulo(texto):
+    if not texto:
+        return False
+
+    t = re.sub(r"\s+", " ", str(texto)).strip().lower()
+
+    padroes = [
+        r"^chapter\s+",
+        r"^cap[ií]tulo\s+",
+        r"^prologue$",
+        r"^pr[oó]logo$",
+        r"^epilogue$",
+        r"^ep[ií]logo$",
     ]
 
-    for p in padroes_leve:
-        if re.search(p, t, flags=re.I):
-            return True
+    return any(re.search(p, t) for p in padroes)
 
-    if nivel in ["media", "pesada"]:
-        padroes_media = [
-            r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}",
-            r"([.!?;:])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇA-Za-zÀ-ÿ])",
-            r"\s{2,}",
+
+def contexto_capitulo(soup, arquivo_nome=""):
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "title"]):
+        txt = tag.get_text(" ", strip=True)
+        if txt and parece_capitulo(txt):
+            return texto_curto(txt, 120)
+
+    nome = Path(str(arquivo_nome)).stem
+    nome_limpo = nome.replace("_", " ").replace("-", " ")
+    nome_limpo = re.sub(r"\s+", " ", nome_limpo).strip()
+
+    if parece_capitulo(nome_limpo):
+        return texto_curto(nome_limpo, 120)
+
+    return "Capítulo não identificado"
+
+
+def montar_blocos(nos):
+    blocos = []
+    bloco = []
+    tamanho = 0
+
+    for item in nos:
+        _, _, texto = item
+        extra = len(texto) + 30
+
+        if bloco and tamanho + extra > MERGE_LENGTH:
+            blocos.append(bloco)
+            bloco = []
+            tamanho = 0
+
+        bloco.append(item)
+        tamanho += extra
+
+    if bloco:
+        blocos.append(bloco)
+
+    return blocos
+
+
+async def traduzir_blocos(blocos, mecanismo, workers):
+    loop = asyncio.get_running_loop()
+    tarefas_textos = []
+
+    for bloco_id, bloco in enumerate(blocos, start=1):
+        textos = [texto for _, _, texto in bloco]
+        tarefas_textos.append((bloco_id, textos, mecanismo))
+
+    resultados = []
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        tarefas = [
+            loop.run_in_executor(executor, traduzir_bloco_sync, item)
+            for item in tarefas_textos
         ]
 
-        for p in padroes_media:
-            if re.search(p, t):
-                return True
+        for tarefa in asyncio.as_completed(tarefas):
+            resultados.append(await tarefa)
 
-    if nivel == "pesada":
-        # Pesada também revisa trechos um pouco estranhos, mas ainda sem reescrever história.
-        if len(t) >= 50:
-            return True
-
-    return False
+    return resultados
 
 
-def prompt_gemini_por_nivel(texto, nivel="leve"):
-    if nivel == "pesada":
-        instrucoes = """
-Você é revisor de EPUB em português brasileiro.
+async def traduzir_html(html, mecanismo, arquivo_nome=""):
+    soup = BeautifulSoup(html, "html.parser")
+    capitulo = contexto_capitulo(soup, arquivo_nome)
 
-Revise o trecho com cuidado, mas SEM reescrever a história.
+    nos = []
+    contador = 1
 
-Pode corrigir:
-- palavras separadas indevidamente;
-- palavras quebradas por hífen/espaço;
-- pontuação;
-- espaçamento;
-- pequenos erros visuais;
-- fluidez leve quando a frase estiver estranha.
+    for node in soup.find_all(string=True):
+        if not texto_visivel(node):
+            continue
 
-Não pode:
-- mudar nomes próprios;
-- traduzir nomes de personagens, cidades, países ou marcas;
-- resumir;
-- adicionar conteúdo;
-- remover conteúdo;
-- mudar o sentido;
-- trocar palavrões por palavras suaves.
-""".strip()
-    elif nivel == "media":
-        instrucoes = """
-Você é revisor de EPUB em português brasileiro.
+        texto = str(node)
 
-Corrija somente:
-- palavras separadas indevidamente;
-- palavras quebradas por hífen/espaço;
-- pontuação grudada;
-- espaços errados;
-- pequenos erros visuais.
+        if len(texto.strip()) < 2:
+            continue
 
-Não reescreva a história.
-Não mude nomes próprios.
-Não traduza nomes de personagens, cidades, países ou marcas.
-Não adicione nem remova conteúdo.
-""".strip()
-    else:
-        instrucoes = """
-Você é revisor técnico de EPUB em português brasileiro.
+        nos.append((contador, node, texto))
+        contador += 1
 
-Corrija APENAS:
-- palavras separadas indevidamente;
-- palavras quebradas por hífen ou espaço;
-- letras soltas no começo quando for erro visual.
+    if not nos:
+        return str(soup), 0, []
 
-Não corrija estilo.
-Não reescreva frases.
-Não mude nomes próprios.
-Não traduza nomes de personagens, cidades, países ou marcas.
-Não adicione nem remova conteúdo.
-""".strip()
+    blocos = montar_blocos(nos)
+    workers = CONFIGS.get(mecanismo, CONFIGS["google_new"])["workers"]
+    resultados = await traduzir_blocos(blocos, mecanismo, workers)
 
-    return f"""
-{instrucoes}
+    mapa_blocos = {i: bloco for i, bloco in enumerate(blocos, start=1)}
 
-Retorne SOMENTE o trecho corrigido, sem explicação.
+    erros = []
+    alterados = 0
 
-Trecho:
-{texto}
-""".strip()
+    for bloco_id, partes_traduzidas, erros_bloco in resultados:
+        bloco = mapa_blocos.get(bloco_id, [])
+
+        if len(partes_traduzidas) != len(bloco):
+            primeiro_texto = texto_curto(bloco[0][2] if bloco else "Trecho não identificado")
+            erros.append({
+                "capitulo": capitulo,
+                "bloco": bloco_id,
+                "trecho_num": "?",
+                "motivo": "desalinhamento de partes",
+                "texto": substituir_sites_por_marca(primeiro_texto),
+            })
+            continue
+
+        for item, texto_traduzido in zip(bloco, partes_traduzidas):
+            _, node, original = item
+
+            if texto_traduzido and texto_traduzido.strip():
+                texto_final = revisar_texto_final(texto_traduzido)
+                node.replace_with(NavigableString(texto_final))
+
+                if texto_final.strip() != original.strip():
+                    alterados += 1
+
+        for erro in erros_bloco:
+            if texto_sujo(erro.get("texto", "")):
+                continue
+
+            erro["capitulo"] = capitulo
+            erros.append(erro)
+
+    # Não limpa o HTML inteiro aqui.
+    # A limpeza global quebrava estética, CSS, alinhamento e podia grudar palavras.
+    html_final = str(soup)
+    return html_final, alterados, erros
 
 
-def gemini_revisar_trecho(texto, nivel="leve"):
-    if not GEMINI_API_KEY or "COLE_SUA_CHAVE" in GEMINI_API_KEY:
-        return remover_sujeiras_texto(texto)
 
-    prompt = prompt_gemini_por_nivel(texto, nivel)
-
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    )
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.05 if nivel == "leve" else 0.1,
-            "topP": 0.8,
-            "maxOutputTokens": 1400,
-        }
+def aplicar_css_calibre_like(book):
+    """
+    Ajuste visual leve para aproximar o EPUB do resultado do Calibre,
+    sem mexer na tradução e sem apagar estilos originais.
+    """
+    css = """
+    html, body {
+        margin-left: 5% !important;
+        margin-right: 5% !important;
+        padding: 0 !important;
+        line-height: 1.35 !important;
     }
 
-    try:
-        resposta = requests.post(url, json=payload, timeout=GEMINI_TIMEOUT)
-
-        if resposta.status_code != 200:
-            return remover_sujeiras_texto(texto)
-
-        dados = resposta.json()
-        candidatos = dados.get("candidates", [])
-
-        if not candidatos:
-            return remover_sujeiras_texto(texto)
-
-        partes = candidatos[0].get("content", {}).get("parts", [])
-
-        if not partes:
-            return remover_sujeiras_texto(texto)
-
-        revisado = partes[0].get("text", "").strip()
-
-        if not revisado:
-            return remover_sujeiras_texto(texto)
-
-        return remover_sujeiras_texto(revisado)
-
-    except Exception:
-        return remover_sujeiras_texto(texto)
-
-
-def corrigir_palavras_grudadas(texto):
-    return limpar_texto_inteligente(texto)
-
-def revisar_html_simples(html):
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Primeiro tenta corrigir por blocos de texto.
-    # Isso pega erros espalhados entre spans, como "protagonis- ta".
-    blocos = soup.find_all(["p", "div", "span", "li", "blockquote"])
-
-    for tag in blocos:
-        if tag.name in ["script", "style", "code", "pre", "head", "title"]:
-            continue
-
-        if tag.find(["p", "div", "li", "blockquote"]):
-            continue
-
-        if tag.find("img"):
-            continue
-
-        original = tag.get_text(" ", strip=True)
-
-        if not original:
-            continue
-
-        novo = remover_sujeiras_texto(original)
-        novo = corrigir_palavras_grudadas(novo)
-        novo = limpar_texto_inteligente(novo)
-
-        if novo and novo != original:
-            tag.clear()
-            tag.append(NavigableString(novo))
-
-    return str(soup)
-
-def revisar_html_gemini(html, nivel='leve'):
-    soup = BeautifulSoup(html, "html.parser")
-    corrigidos = 0
-    chamadas = 0
-
-    blocos = soup.find_all(["p", "div", "span", "li", "blockquote"])
-
-    for tag in blocos:
-        if tag.name in ["script", "style", "code", "pre", "head", "title"]:
-            continue
-
-        if tag.find(["p", "div", "li", "blockquote"]):
-            continue
-
-        if tag.find("img"):
-            continue
-
-        original = tag.get_text(" ", strip=True)
-
-        if not original:
-            continue
-
-        novo = remover_sujeiras_texto(original)
-        novo = corrigir_palavras_grudadas(novo)
-        novo = limpar_texto_inteligente(novo)
-
-        usar_gemini = texto_suspeito_para_gemini_nivel(novo, nivel) and chamadas < MAX_GEMINI_TRECHOS
-
-        if usar_gemini:
-            try:
-                revisado = gemini_revisar_trecho(novo, nivel)
-                chamadas += 1
-
-                if (
-                    revisado
-                    and len(revisado) >= max(3, int(len(novo) * 0.55))
-                    and len(revisado) <= max(120, int(len(novo) * 1.9))
-                ):
-                    novo = limpar_texto_inteligente(revisado)
-            except Exception:
-                pass
-
-        if novo and novo != original:
-            tag.clear()
-            tag.append(NavigableString(novo))
-            corrigidos += 1
-
-    return str(soup), corrigidos
-
-def revisar_epub(entrada, saida):
-    book = epub.read_epub(str(entrada))
-
-    for item in book.get_items_of_type(ITEM_DOCUMENT):
-        try:
-            html = item.get_content().decode("utf-8", errors="ignore")
-            html = revisar_html_simples(html)
-            item.set_content(html.encode("utf-8"))
-        except Exception:
-            pass
-
-    epub.write_epub(str(saida), book)
-
-
-def revisar_epub_com_gemini(entrada, saida, progresso_callback=None, nivel='leve', user_id=None):
-    book = epub.read_epub(str(entrada))
-    docs = list(book.get_items_of_type(ITEM_DOCUMENT))
-    total = len(docs) or 1
-    total_corrigidos = 0
-
-    for i, item in enumerate(docs, start=1):
-        if user_id is not None and user_id in cancelamentos:
-            raise Exception("Revisão cancelada.")
-
-        try:
-            html = item.get_content().decode("utf-8", errors="ignore")
-            html, corrigidos = revisar_html_gemini(html, nivel=nivel)
-            total_corrigidos += corrigidos
-            item.set_content(html.encode("utf-8"))
-        except Exception:
-            pass
-
-    epub.write_epub(str(saida), book)
-    return total_corrigidos
-
-
-def pegar_imagens_iniciais(caminho_epub, limite=3):
-    book = epub.read_epub(str(caminho_epub))
-    imagens = list(book.get_items_of_type(ITEM_IMAGE))
-
-    escolhidas = []
-
-    for img in imagens:
-        nome = (img.file_name or "").lower()
-        if "cover" in nome or "capa" in nome:
-            escolhidas.append(img)
-
-    for img in imagens:
-        if img not in escolhidas:
-            escolhidas.append(img)
-
-    return escolhidas[:limite]
-
-
-def pegar_todas_imagens_epub(caminho_epub, limite=30):
-    book = epub.read_epub(str(caminho_epub))
-    imagens = list(book.get_items_of_type(ITEM_IMAGE))
-
-    # Capa primeiro, depois demais.
-    imagens_ordenadas = []
-    for img in imagens:
-        nome = (img.file_name or "").lower()
-        if "cover" in nome or "capa" in nome:
-            imagens_ordenadas.append(img)
-
-    for img in imagens:
-        if img not in imagens_ordenadas:
-            imagens_ordenadas.append(img)
-
-    return imagens_ordenadas[:limite]
-
-
-def salvar_imagem_temp(img):
-    media = getattr(img, "media_type", "") or ""
-    ext = ".jpg"
-
-    if "png" in media:
-        ext = ".png"
-    elif "webp" in media:
-        ext = ".webp"
-
-    caminho = TEMP_DIR / f"imagem_{uuid.uuid4().hex}{ext}"
-
-    with open(caminho, "wb") as f:
-        f.write(img.get_content())
-
-    return caminho
-
-
-def ebook_convert_disponivel():
-    return shutil.which("ebook-convert") is not None
-    
-
-def converter_com_calibre(entrada, saida):
-    if not ebook_convert_disponivel():
-        raise Exception(
-            "O conversor do Calibre não foi encontrado. "
-            "Instale o Calibre ou deixe o comando ebook-convert disponível."
-        )
-
-    entrada = Path(entrada)
-    saida = Path(saida)
-
-    if entrada.suffix.lower() == ".epub":
-        saida = saida.with_suffix(".pdf")
-
-    elif entrada.suffix.lower() == ".pdf":
-        saida = saida.with_suffix(".epub")
-
-    else:
-        raise Exception("Formato não suportado. Use apenas EPUB ou PDF.")
-
-    env = os.environ.copy()
-    env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
-    env["QTWEBENGINE_CHROMIUM_FLAGS"] = "--no-sandbox --disable-gpu"
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["QT_QUICK_BACKEND"] = "software"
-    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-
-    comando = [
-        "ebook-convert",
-        str(entrada),
-        str(saida),
-    ]
-
-    resultado = subprocess.run(
-        comando,
-        capture_output=True,
-        text=True,
-        timeout=1200,
-        env=env,
-    )
-
-    if resultado.returncode != 0:
-        raise Exception(
-            resultado.stderr[-1500:]
-            or resultado.stdout[-1500:]
-            or "Falha na conversão."
-        )
-
-
-def limpar_sessao_capa(user_id):
-    dados = usuarios.get(user_id, {})
-
-    caminho = dados.get("capa_entrada")
-    if caminho:
-        try:
-            Path(caminho).unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    dados.pop("capa_entrada", None)
-    dados.pop("capa_imagens", None)
-    dados.pop("capa_nome_original", None)
-    dados.pop("imagem_escolhida", None)
-    dados.pop("remover_imagens", None)
-
-
-def remover_varias_imagens_epub(entrada, saida, nomes_imagens):
-    book = epub.read_epub(str(entrada))
-
-    nomes_limpos = [
-        nome.replace("\\", "/").split("/")[-1]
-        for nome in nomes_imagens
-    ]
+    h1, h2, h3, h4 {
+        text-align: center !important;
+        margin-top: 10% !important;
+        margin-bottom: 1.2em !important;
+        font-weight: bold !important;
+    }
+
+    h1 + p, h2 + p, h3 + p,
+    .subtitle, .sub-title, .author, .byline {
+        text-align: center !important;
+    }
+
+    p {
+        margin-top: 0.55em !important;
+        margin-bottom: 0.55em !important;
+    }
+
+    i, em {
+        font-style: italic !important;
+    }
+
+    blockquote, .quote, .epigraph, .dedication {
+        font-style: italic !important;
+        margin-left: 7% !important;
+        margin-right: 7% !important;
+    }
+
+    /* Possíveis mensagens de celular. Só aplica se o EPUB tiver classes com esses nomes. */
+    [class*="sms"], [class*="text"], [class*="message"],
+    [class*="chat"], [class*="bubble"], [class*="phone"],
+    [class*="msg"], [class*="imessage"] {
+        display: block !important;
+        width: fit-content !important;
+        max-width: 82% !important;
+        margin-top: 0.25em !important;
+        margin-bottom: 0.25em !important;
+        padding: 0.28em 0.7em !important;
+        border-radius: 0.9em !important;
+        background: #eeeeee !important;
+        color: #111111 !important;
+        text-align: left !important;
+        font-style: normal !important;
+    }
+    """
 
     for item in book.get_items_of_type(ITEM_DOCUMENT):
         try:
             html = item.get_content().decode("utf-8", errors="ignore")
             soup = BeautifulSoup(html, "html.parser")
 
-            for img in soup.find_all("img"):
-                src = img.get("src", "")
-                src_limpo = src.replace("\\", "/").split("/")[-1]
+            style_tag = soup.new_tag("style")
+            style_tag.string = css
 
-                if src in nomes_imagens or src_limpo in nomes_limpos:
-                    img.decompose()
+            if soup.head:
+                soup.head.append(style_tag)
+            else:
+                soup.insert(0, style_tag)
 
             item.set_content(str(soup).encode("utf-8"))
 
         except Exception:
             pass
 
-    novos_items = []
+def aplicar_estetica_celular_e_capitulo(book):
+    css = """
+    body {
+        margin-left: 5% !important;
+        margin-right: 5% !important;
+        line-height: 1.35 !important;
+    }
 
-    for item in book.items:
-        item_nome = getattr(item, "file_name", "")
-        item_limpo = item_nome.replace("\\", "/").split("/")[-1]
+    h1, h2, h3, h4 {
+        text-align: center !important;
+        margin-top: 12% !important;
+        margin-bottom: 1em !important;
+    }
 
-        if item_nome not in nomes_imagens and item_limpo not in nomes_limpos:
-            novos_items.append(item)
+    .alma-capitulo {
+        text-align: center !important;
+        font-weight: bold !important;
+        margin-top: 12% !important;
+        margin-bottom: 0.4em !important;
+        border-bottom: 1px solid #aaa !important;
+        width: fit-content !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        padding-bottom: 0.25em !important;
+    }
 
-    book.items = novos_items
-    epub.write_epub(str(saida), book)
+    .alma-nome-capitulo {
+        text-align: center !important;
+        font-style: italic !important;
+        font-weight: bold !important;
+        font-size: 1.25em !important;
+        margin-bottom: 4em !important;
+    }
+
+    .alma-sms {
+        display: block !important;
+        width: fit-content !important;
+        max-width: 78% !important;
+        background: #eeeeee !important;
+        color: #222 !important;
+        border-radius: 999px !important;
+        padding: 0.28em 0.75em !important;
+        margin: 0.25em 0 0.25em 7% !important;
+        text-align: left !important;
+        font-style: normal !important;
+        font-size: 0.92em !important;
+        line-height: 1.15 !important;
+    }
+    """
+
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        try:
+            html = item.get_content().decode("utf-8", errors="ignore")
+            soup = BeautifulSoup(html, "html.parser")
+
+            style_tag = soup.new_tag("style")
+            style_tag.string = css
+
+            if soup.head:
+                soup.head.append(style_tag)
+            else:
+                soup.insert(0, style_tag)
+
+            textos = soup.find_all(["p", "div", "h1", "h2", "h3"])
+
+            for i, tag in enumerate(textos):
+                txt = tag.get_text(" ", strip=True)
+
+                if re.search(r"cap[ií]tulo\s+\d+|pr[oó]logo|ep[ií]logo", txt, re.I):
+                    tag["class"] = tag.get("class", []) + ["alma-capitulo"]
+
+                    if i + 1 < len(textos):
+                        prox = textos[i + 1]
+                        prox_txt = prox.get_text(" ", strip=True)
+                        if prox_txt and len(prox_txt) <= 40:
+                            prox["class"] = prox.get("class", []) + ["alma-nome-capitulo"]
+
+                if 2 <= len(txt) <= 95:
+                    antes = textos[i - 1].get_text(" ", strip=True) if i > 0 else ""
+                    depois = textos[i + 1].get_text(" ", strip=True) if i + 1 < len(textos) else ""
+
+                    if (
+                        len(antes) <= 95
+                        and len(depois) <= 120
+                        and not re.search(r"cap[ií]tulo|pr[oó]logo|ep[ií]logo", txt, re.I)
+                    ):
+                        tag["class"] = tag.get("class", []) + ["alma-sms"]
+
+            item.set_content(str(soup).encode("utf-8"))
+
+        except Exception:
+            pass
+            
+
+def criar_pagina_marca():
+    pagina = epub.EpubHtml(
+        title="Alma Scriptum",
+        file_name="alma_scriptum.xhtml",
+        lang="pt-BR",
+    )
+
+    imagem_html = ""
+
+    if MARCA_IMAGEM.exists():
+        imagem_html = """
+        <div style="text-align:center; margin:0; padding:0;">
+            <img src="images/alma_scriptum.png"
+            style="width:100%; max-width:900px; display:block; margin:0 auto;">
+        </div>
+        """
+
+    pagina.content = f"""
+    <html>
+    <body style="margin:0; padding:0; background:#ffffff;">
+        {imagem_html}
+    </body>
+    </html>
+    """
+
+    return pagina
 
 
-def trocar_imagem_epub(entrada, saida, nome_imagem, nova_imagem_bytes):
-    book = epub.read_epub(str(entrada))
+def adicionar_pagina_marca(book):
+    pagina = criar_pagina_marca()
 
-    for item in book.get_items_of_type(ITEM_IMAGE):
-        if item.file_name == nome_imagem:
-            item.content = nova_imagem_bytes
-            item.media_type = "image/jpeg"
-            break
+    if MARCA_IMAGEM.exists():
+        imagem = epub.EpubItem(
+            uid="alma_img",
+            file_name="images/alma_scriptum.png",
+            media_type="image/png",
+            content=MARCA_IMAGEM.read_bytes(),
+        )
+        book.add_item(imagem)
 
-    epub.write_epub(str(saida), book)
+    book.add_item(pagina)
+
+    spine = list(book.spine)
+
+    if len(spine) > 1:
+        spine.insert(1, pagina)
+    else:
+        spine.append(pagina)
+
+    book.spine = spine
+
+
+def extrair_capa_epub(caminho_epub):
+    try:
+        book = epub.read_epub(str(caminho_epub))
+        imagens = list(book.get_items_of_type(ITEM_IMAGE))
+
+        if not imagens:
+            return None
+
+        escolhida = None
+
+        for img in imagens:
+            nome = (img.file_name or "").lower()
+            if "cover" in nome or "capa" in nome:
+                escolhida = img
+                break
+
+        if escolhida is None:
+            escolhida = imagens[0]
+
+        ext = ".jpg"
+        media = getattr(escolhida, "media_type", "") or ""
+
+        if "png" in media:
+            ext = ".png"
+        elif "webp" in media:
+            ext = ".webp"
+
+        caminho = TEMP_DIR / f"capa_{uuid.uuid4().hex}{ext}"
+
+        with open(caminho, "wb") as f:
+            f.write(escolhida.get_content())
+
+        return caminho
+
+    except Exception:
+        return None
+
+
+async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
+    if not mensagem:
+        return
+
+    try:
+        porcentagem = int((i / total) * 100)
+        barra = barra_progresso(porcentagem)
+        bloco_erros = resumo_erros(erros, limite=3)
+
+        await mensagem.edit_text(
+            f"📚 Alma Scriptum Translate\n\n"
+            f"⚙️ Mecanismo: {nome_mecanismo(mecanismo)}\n"
+            f"📖 Arquivo interno: {i}/{total}\n"
+            f"📊 Progresso: {porcentagem}%\n\n"
+            f"{barra}\n\n"
+            f"✨ Traduzindo... aguarde."
+            f"{bloco_erros}"
+        )
+    except Exception:
+        pass
+
+
+def salvar_log(nome_base, erros):
+    if not erros:
+        return None
+
+    caminho = TEMP_DIR / f"log_erros_{uuid.uuid4().hex}.txt"
+
+    with open(caminho, "w", encoding="utf-8") as f:
+        f.write(f"LOG DE PONTOS COM ATENÇÃO — {nome_base}\n")
+        f.write("=" * 70 + "\n\n")
+
+        for i, erro in enumerate(erros, start=1):
+            f.write(f"PONTO {i}\n")
+            f.write(f"Arquivo: {erro.get('arquivo', 'não identificado')}\n")
+            f.write(f"Capítulo: {erro.get('capitulo', 'Capítulo não identificado')}\n")
+            f.write(f"Bloco: {erro.get('bloco', 'não informado')}\n")
+            f.write(f"Trecho Nº: {erro.get('trecho_num', 'não informado')}\n")
+            f.write(f"Motivo: {erro.get('motivo', 'não informado')}\n")
+            f.write(f"Trecho exato:\n{erro.get('texto', 'não identificado')}\n")
+            f.write("\n" + "-" * 70 + "\n\n")
+
+    return caminho
+
+
+
+def _normalizar_zip_path(caminho):
+    return str(caminho).replace("\\", "/").lstrip("/")
+
+
+def _encontrar_opf_no_epub(arquivos):
+    container_path = "META-INF/container.xml"
+
+    if container_path not in arquivos:
+        return None
+
+    try:
+        soup = BeautifulSoup(arquivos[container_path].decode("utf-8", errors="ignore"), "xml")
+        rootfile = soup.find("rootfile")
+        if rootfile and rootfile.get("full-path"):
+            return _normalizar_zip_path(rootfile.get("full-path"))
+    except Exception:
+        return None
+
+    return None
+
+
+def atualizar_titulo_epub_zip(arquivos, titulo_final):
+    opf_path = _encontrar_opf_no_epub(arquivos)
+
+    if not opf_path or opf_path not in arquivos:
+        return arquivos
+
+    try:
+        soup = BeautifulSoup(arquivos[opf_path].decode("utf-8", errors="ignore"), "xml")
+        titulo_limpo = Path(titulo_final).stem
+
+        title_tag = soup.find("dc:title")
+        if title_tag:
+            title_tag.string = titulo_limpo
+        else:
+            metadata = soup.find("metadata")
+            if metadata:
+                novo_title = soup.new_tag("dc:title")
+                novo_title.string = titulo_limpo
+                metadata.append(novo_title)
+
+        arquivos[opf_path] = str(soup).encode("utf-8")
+
+    except Exception as erro:
+        print(f"⚠️ Não consegui renomear título interno: {erro}")
+
+    return arquivos
+
+
+def adicionar_pagina_marca_zip(arquivos):
+    if not MARCA_IMAGEM.exists():
+        return arquivos
+
+    opf_path = _encontrar_opf_no_epub(arquivos)
+
+    if not opf_path or opf_path not in arquivos:
+        return arquivos
+
+    try:
+        opf_dir = str(Path(opf_path).parent).replace("\\", "/")
+        if opf_dir == ".":
+            opf_dir = ""
+
+        pagina_rel = "alma_scriptum.xhtml"
+        imagem_rel = "images/alma_scriptum.png"
+
+        pagina_path = _normalizar_zip_path(f"{opf_dir}/{pagina_rel}" if opf_dir else pagina_rel)
+        imagem_path = _normalizar_zip_path(f"{opf_dir}/{imagem_rel}" if opf_dir else imagem_rel)
+
+        pagina_html = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            '<head><title>Alma Scriptum</title></head>\n'
+            '<body style="margin:0; padding:0; background:#ffffff;">\n'
+            '<div style="text-align:center; margin:0; padding:0;">\n'
+            f'<img src="{imagem_rel}" alt="Alma Scriptum" '
+            'style="width:100%; max-width:900px; display:block; margin:0 auto;" />\n'
+            '</div>\n'
+            '</body>\n'
+            '</html>\n'
+        )
+
+        soup = BeautifulSoup(arquivos[opf_path].decode("utf-8", errors="ignore"), "xml")
+        manifest = soup.find("manifest")
+        spine = soup.find("spine")
+
+        if manifest:
+            for old in manifest.find_all("item"):
+                if old.get("id") in ["alma_scriptum_page", "alma_scriptum_img"]:
+                    old.decompose()
+
+            item_img = soup.new_tag("item")
+            item_img["id"] = "alma_scriptum_img"
+            item_img["href"] = imagem_rel
+            item_img["media-type"] = "image/png"
+            manifest.append(item_img)
+
+            item_page = soup.new_tag("item")
+            item_page["id"] = "alma_scriptum_page"
+            item_page["href"] = pagina_rel
+            item_page["media-type"] = "application/xhtml+xml"
+            manifest.append(item_page)
+
+        if spine:
+            for old in spine.find_all("itemref"):
+                if old.get("idref") == "alma_scriptum_page":
+                    old.decompose()
+
+            itemref = soup.new_tag("itemref")
+            itemref["idref"] = "alma_scriptum_page"
+
+            refs = spine.find_all("itemref")
+            if refs:
+                refs[0].insert_after(itemref)
+            else:
+                spine.append(itemref)
+
+        arquivos[opf_path] = str(soup).encode("utf-8")
+        arquivos[pagina_path] = pagina_html.encode("utf-8")
+        arquivos[imagem_path] = MARCA_IMAGEM.read_bytes()
+
+    except Exception as erro:
+        print(f"⚠️ Não consegui adicionar a marca no EPUB preservado: {erro}")
+
+    return arquivos
+
+
+async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True, nome_original=None):
+    erros = []
+    traduzidos = 0
+
+    extensoes_html = (".xhtml", ".html", ".htm")
+
+    with zipfile.ZipFile(str(entrada), "r") as zip_in:
+        nomes_originais = zip_in.namelist()
+        arquivos = {nome: zip_in.read(nome) for nome in nomes_originais}
+
+    documentos = [
+        nome for nome in nomes_originais
+        if nome.lower().endswith(extensoes_html)
+        and not nome.lower().endswith("nav.xhtml")
+    ]
+
+    total = len(documentos) or 1
+
+    for i, nome in enumerate(documentos, start=1):
+        if user_id in cancelamentos:
+            raise Exception("Tradução cancelada.")
+
+        try:
+            conteudo = arquivos[nome].decode("utf-8", errors="ignore")
+
+            if conteudo.strip():
+                traduzido, alterados, erros_html = await traduzir_html(
+                    conteudo,
+                    mecanismo,
+                    nome,
+                )
+
+                for erro in erros_html:
+                    erro["arquivo"] = f"{i}/{total}"
+                    erros.append(erro)
+
+                if alterados > 0:
+                    traduzidos += 1
+                    arquivos[nome] = traduzido.encode("utf-8")
+
+                print(f"✅ Traduzido {i}/{total}: {nome}")
+
+        except Exception as erro:
+            erros.append({
+                "arquivo": f"{i}/{total}",
+                "capitulo": "Capítulo não identificado",
+                "bloco": "-",
+                "trecho_num": "-",
+                "motivo": str(erro)[:120],
+                "texto": "erro geral no arquivo interno",
+            })
+            print(f"⚠️ Arquivo interno {i}/{total}: {str(erro)[:120]}")
+
+        await atualizar_progresso(mensagem, mecanismo, i, total, erros)
+        await asyncio.sleep(REQUEST_INTERVAL)
+
+    if traduzidos == 0:
+        raise Exception("Nenhum texto foi traduzido. Teste outro EPUB ou outro modo Google.")
+
+    nome_base_para_titulo = nome_original or Path(entrada).name
+    titulo_final = criar_nome_final(nome_base_para_titulo)
+    arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
+
+    if adicionar_marca:
+        arquivos = adicionar_pagina_marca_zip(arquivos)
+
+    nomes_finais = list(nomes_originais)
+    for nome in arquivos:
+        if nome not in nomes_finais:
+            nomes_finais.append(nome)
+
+    with zipfile.ZipFile(str(saida), "w", compression=zipfile.ZIP_DEFLATED) as zip_out:
+        for nome in nomes_finais:
+            zip_out.writestr(nome, arquivos[nome])
+
+    return erros
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
-    if not autorizado(user_id):
-        await update.message.reply_text("⛔ Você não tem acesso ao Alma Scriptum Studio.")
+    if not usuario_liberado(user_id):
+        await update.message.reply_text("⛔ Você não possui acesso ao Alma Scriptum Translate.")
         return
 
-    cancelamentos.add(user_id)
-    usuarios[user_id] = {"modo": None}
+    if user_id not in usuarios:
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+
+    mecanismo = usuarios[user_id]["mecanismo"]
+    marca = "✅ Ativada" if usuarios[user_id]["marca"] else "❌ Desativada"
 
     await update.message.reply_text(
-        "📚 Alma Scriptum Studio\n\n"
-        "Escolha o que deseja fazer:",
-        reply_markup=painel_principal(),
+        "📚 Alma Scriptum Translate\n\n"
+        "✨ Modo organizado\n"
+        "⚡ Mantém estrutura do EPUB\n"
+        "📖 EPUB Inglês → Português\n\n"
+        f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
+        f"🖼️ Marca: {marca}\n\n"
+        "📤 Escolha o mecanismo e envie um EPUB.",
+        reply_markup=teclado_principal(),
     )
 
 
 async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     user_id = query.from_user.id
 
-    if not autorizado(user_id):
+    if not usuario_liberado(user_id):
         await query.message.reply_text("⛔ Acesso negado.")
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"modo": None}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
-    data = query.data
+    if query.data == "set_google_new":
+        usuarios[user_id]["mecanismo"] = "google_new"
 
-    if data == "modo_revisar":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "revisar"
-        await query.message.reply_text(
-            "🛠 Modo Revisar / Limpar EPUB\n\n"
-            "Envie o EPUB traduzido para eu limpar sujeiras de site e organizar o texto."
-        )
+    elif query.data == "set_google_html":
+        usuarios[user_id]["mecanismo"] = "google_html"
 
-    elif data == "modo_gemini_menu":
-        await query.message.reply_text(
-            "🤖 Revisar com Gemini\n\n"
-            "Escolha o nível da revisão:",
-            reply_markup=painel_gemini(),
-        )
+    elif query.data == "set_google_old":
+        usuarios[user_id]["mecanismo"] = "google_old"
 
-    elif data == "gemini_leve":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "gemini"
-        usuarios[user_id]["nivel_gemini"] = "leve"
-        await query.message.reply_text(
-            "🟢 Revisão leve ativada.\n\n"
-            "Foco:\n"
-            "• palavras separadas\n"
-            "• palavras quebradas\n"
-            "• erros leves de espaçamento\n\n"
-            "Envie o EPUB já traduzido."
-        )
+    elif query.data == "marca":
+        usuarios[user_id]["marca"] = not usuarios[user_id]["marca"]
 
-    elif data == "gemini_media":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "gemini"
-        usuarios[user_id]["nivel_gemini"] = "media"
-        await query.message.reply_text(
-            "🟡 Revisão média ativada.\n\n"
-            "Foco:\n"
-            "• palavras separadas\n"
-            "• pontuação grudada\n"
-            "• pequenos erros visuais\n\n"
-            "Envie o EPUB já traduzido."
-        )
-
-    elif data == "gemini_pesada":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "gemini"
-        usuarios[user_id]["nivel_gemini"] = "pesada"
-        await query.message.reply_text(
-            "🔴 Revisão pesada ativada.\n\n"
-            "Foco:\n"
-            "• revisão mais forte\n"
-            "• fluidez leve\n"
-            "• erros difíceis\n\n"
-            "Sem mudar nomes próprios nem a história.\n\n"
-            "Envie o EPUB já traduzido."
-        )
-
-    elif data == "modo_imagens":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "imagens"
-        await query.message.reply_text(
-            "🖼 Traduzir / trocar imagens\n\n"
-            "Envie o EPUB.\n"
-            "Vou mostrar as imagens encontradas para você escolher qual deseja trocar/traduzir."
-        )
-
-    elif data == "modo_capa":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "capa"
-        await query.message.reply_text(
-            "🖼 Modo Editar capa\n\n"
-            "Envie o EPUB. Eu vou mostrar apenas as primeiras imagens/capas iniciais."
-        )
-
-    elif data == "modo_conversor":
-        await query.message.reply_text(
-            "🔄 Conversor Alma Scriptum\n\n"
-            "Escolha o tipo de conversão:",
-            reply_markup=painel_conversor(),
-        )
-
-    elif data == "conv_epub_pdf":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "epub_pdf"
-        await query.message.reply_text("📘 Envie o EPUB que deseja converter para PDF.")
-
-    elif data == "conv_pdf_epub":
-        cancelamentos.discard(user_id)
-        usuarios[user_id]["modo"] = "pdf_epub"
-        await query.message.reply_text("📄 Envie o PDF que deseja converter para EPUB.")
-
-    elif data == "voltar":
-        usuarios[user_id]["modo"] = None
-        await query.message.reply_text(
-            "📚 Alma Scriptum Studio\n\nEscolha uma opção:",
-            reply_markup=painel_principal(),
-        )
-
-    elif data.startswith("remover_img_"):
-        indice = int(data.replace("remover_img_", "")) - 1
-        dados = usuarios.get(user_id, {})
-        imagens = dados.get("capa_imagens", [])
-
-        if indice < 0 or indice >= len(imagens):
-            await query.message.reply_text("⚠️ Não encontrei essa imagem.")
-            return
-
-        if "remover_imagens" not in usuarios[user_id]:
-            usuarios[user_id]["remover_imagens"] = []
-
-        if indice not in usuarios[user_id]["remover_imagens"]:
-            usuarios[user_id]["remover_imagens"].append(indice)
-
-        await query.message.reply_text(
-            f"🗑 Imagem {indice + 1} marcada para remoção.\n\n"
-            "Quando terminar de escolher, aperte 📦 Finalizar edição."
-        )
-
-    elif data.startswith("trocar_img_"):
-        indice = int(data.replace("trocar_img_", "")) - 1
-        dados = usuarios.get(user_id, {})
-        imagens = dados.get("capa_imagens", [])
-
-        if indice < 0 or indice >= len(imagens):
-            await query.message.reply_text("⚠️ Não encontrei essa imagem. Envie o EPUB novamente.")
-            return
-
-        usuarios[user_id]["modo"] = "aguardando_nova_capa"
-        usuarios[user_id]["imagem_escolhida"] = indice
-
-        await query.message.reply_text(
-            "🔁 Envie agora a nova imagem traduzida.\n\n"
-            "Pode mandar como foto normal."
-        )
-
-    elif data == "manter_img":
-        await query.message.reply_text("✅ Mantido. Nenhuma alteração feita nessa imagem.")
-
-    elif data == "finalizar_capa":
-        dados = usuarios.get(user_id, {})
-        entrada = dados.get("capa_entrada")
-        imagens = dados.get("capa_imagens", [])
-        remover_indices = dados.get("remover_imagens", [])
-        nome_original = dados.get("capa_nome_original", "Livro.epub")
-
-        if not entrada:
-            await query.message.reply_text("⚠️ Não encontrei o EPUB. Envie novamente.")
-            return
-
-        if not remover_indices:
-            await query.message.reply_text("✅ Nenhuma imagem foi marcada para remover.\n\nSe você já trocou uma imagem, o EPUB atualizado já foi enviado na troca.")
-            return
-
-        saida = TEMP_DIR / nome_epub(nome_original)
-        msg = await query.message.reply_text("📦 Finalizando edição de capa...")
-
-        await atualizar_carregamento(
-            msg,
-            "🖼 Editor de capa",
-            40,
-            "🧹 Removendo imagens escolhidas...",
-        )
-
-        nomes_para_remover = [
-            imagens[i]
-            for i in remover_indices
-            if 0 <= i < len(imagens)
-        ]
-
-        remover_varias_imagens_epub(entrada, saida, nomes_para_remover)
-
-        await atualizar_carregamento(
-            msg,
-            "🖼 Editor de capa",
-            85,
-            "📦 Preparando EPUB atualizado...",
-        )
-
-        with open(saida, "rb") as f:
-            await query.message.reply_document(
-                document=InputFile(f, filename=nome_epub(nome_original)),
-                caption="✅ Edição finalizada. EPUB atualizado.",
-                read_timeout=180,
-                write_timeout=180,
-                connect_timeout=90,
-                pool_timeout=90,
-            )
-
-        await atualizar_carregamento(
-            msg,
-            "🖼 Editor de capa",
-            100,
-            "✅ EPUB editado e enviado.",
-        )
-
-        saida.unlink(missing_ok=True)
-        limpar_sessao_capa(user_id)
-
-    elif data == "cancelar":
+    elif query.data == "cancelar":
         cancelamentos.add(user_id)
-        limpar_sessao_capa(user_id)
-        usuarios[user_id] = {"modo": None}
-        await query.message.reply_text("❌ Cancelamento solicitado. Se houver revisão rodando, ela vai parar no próximo arquivo interno.")
-
-
-async def cancelar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    if not autorizado(user_id):
+        await query.message.reply_text("🛑 Cancelamento solicitado. O bot vai parar no próximo arquivo interno.")
         return
 
-    cancelamentos.add(user_id)
-    limpar_sessao_capa(user_id)
-    usuarios[user_id] = {"modo": None}
+    mecanismo = usuarios[user_id]["mecanismo"]
+    marca = "✅ Ativada" if usuarios[user_id]["marca"] else "❌ Desativada"
 
-    await update.message.reply_text(
-        "❌ Cancelamento solicitado.\n"
-        "Use /start para abrir o painel novamente."
+    await query.message.reply_text(
+        "📚 Alma Scriptum Translate\n\n"
+        "✨ Modo organizado\n"
+        "⚡ Mantém estrutura do EPUB\n"
+        "📖 EPUB Inglês → Português\n\n"
+        f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
+        f"🖼️ Marca: {marca}\n\n"
+        "📤 Agora envie o EPUB.",
+        reply_markup=teclado_principal(),
     )
 
 
 async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
-    if not autorizado(user_id):
-        await update.message.reply_text("⛔ Você não tem acesso.")
+    if not usuario_liberado(user_id):
+        await update.message.reply_text("⛔ Você não possui acesso.")
         return
 
-    modo = usuarios.get(user_id, {}).get("modo")
+    cancelamentos.discard(user_id)
 
-    if not modo:
-        await update.message.reply_text("Escolha uma opção no painel primeiro. Use /start.")
-        return
+    if user_id not in usuarios:
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
     documento = update.message.document
 
-    if not documento:
+    if not documento.file_name.lower().endswith(".epub"):
+        await update.message.reply_text("⚠️ Envie apenas arquivo EPUB.")
         return
 
-    nome_original = documento.file_name
-    entrada = TEMP_DIR / f"{uuid.uuid4()}_{nome_original}"
+    nome = limpar_nome(documento.file_name)
+
+    entrada = TEMP_DIR / f"{uuid.uuid4()}_{nome}"
+    saida = TEMP_DIR / f"PTBR_{nome}"
+
+    mecanismo = usuarios[user_id]["mecanismo"]
+
+    mensagem = await update.message.reply_text(
+        "📚 EPUB recebido\n\n"
+        f"⚙️ Mecanismo principal: {nome_mecanismo(mecanismo)}\n"
+        "⚡ Tradução com fallback automático iniciada..."
+    )
 
     arquivo = await documento.get_file()
     await arquivo.download_to_drive(str(entrada))
 
-    saida = None
+    log_path = None
+    capa_path = None
+    saida_final = None
 
     try:
-        if modo == "revisar":
-            if not nome_original.lower().endswith(".epub"):
-                await update.message.reply_text("⚠️ Envie apenas EPUB para revisão.")
-                return
+        capa_path = extrair_capa_epub(entrada)
 
-            msg = await update.message.reply_text("🛠 Preparando revisão...")
-            await atualizar_carregamento(msg, "🛠 Revisando / Limpando EPUB", 15, "📥 Arquivo recebido. Preparando leitura...")
+        erros = await traduzir_epub(
+            entrada=entrada,
+            saida=saida,
+            mecanismo=mecanismo,
+            user_id=user_id,
+            mensagem=mensagem,
+            adicionar_marca=usuarios[user_id]["marca"],
+            nome_original=documento.file_name,
+        )
 
-            saida = TEMP_DIR / nome_epub(nome_original)
+        try:
+            await mensagem.edit_text("📦 Enviando EPUB traduzido...")
+        except Exception:
+            pass
 
-            await atualizar_carregamento(msg, "🛠 Revisando / Limpando EPUB", 45, "🧹 Limpando sujeiras e organizando texto...")
-            revisar_epub(entrada, saida)
+        nome_final = criar_nome_final(documento.file_name)
+        saida_final = TEMP_DIR / nome_final
 
-            await atualizar_carregamento(msg, "🛠 Revisando / Limpando EPUB", 85, "📦 Preparando EPUB revisado para envio...")
+        try:
+            saida.rename(saida_final)
+        except Exception:
+            saida_final = saida
 
-            with open(saida, "rb") as f:
+        print("📌 Nome final enviado:", nome_final)
+
+        if capa_path and capa_path.exists():
+            try:
+                with open(capa_path, "rb") as capa_file:
+                    await update.message.reply_photo(
+                        photo=capa_file,
+                    )
+
+            except Exception:
+                pass
+
+        with open(saida_final, "rb") as arquivo_saida:
+            try:
+                arquivo_telegram = InputFile(arquivo_saida, filename=nome_final)
+
                 await update.message.reply_document(
-                    document=InputFile(f, filename=nome_epub(nome_original)),
-                    caption="✅ EPUB revisado pelo Alma Scriptum Studio.",
+                    document=arquivo_telegram,
+                    caption="✨ Tradução concluída por Alma Scriptum Translate",
                     read_timeout=180,
                     write_timeout=180,
                     connect_timeout=90,
                     pool_timeout=90,
                 )
 
-            await atualizar_carregamento(msg, "🛠 Revisando / Limpando EPUB", 100, "✅ EPUB revisado e enviado.")
-
-        elif modo == "gemini":
-            if not nome_original.lower().endswith(".epub"):
-                await update.message.reply_text("⚠️ Envie apenas EPUB para revisão com Gemini.")
-                return
-
-            msg = await update.message.reply_text("🤖 Preparando revisão com Gemini...")
-            await atualizar_carregamento(msg, "🤖 Revisão com Gemini", 10, "📥 EPUB recebido. Lendo estrutura...")
-
-            saida = TEMP_DIR / nome_epub(nome_original)
-
-            await atualizar_carregamento(msg, "🤖 Revisão com Gemini", 35, "🔍 Procurando trechos suspeitos...")
-            await atualizar_carregamento(msg, "🤖 Revisão com Gemini", 55, "✨ Corrigindo com IA somente onde precisa...")
-
-            nivel = usuarios.get(user_id, {}).get("nivel_gemini", "leve")
-            cancelamentos.discard(user_id)
-
-            loop = asyncio.get_running_loop()
-            corrigidos = await loop.run_in_executor(
-                None,
-                lambda: revisar_epub_com_gemini(entrada, saida, nivel=nivel, user_id=user_id)
-            )
-
-            await atualizar_carregamento(msg, "🤖 Revisão com Gemini", 85, "📦 Preparando EPUB revisado...")
-
-            with open(saida, "rb") as f:
-                await update.message.reply_document(
-                    document=InputFile(f, filename=nome_epub(nome_original)),
-                    caption=f"✅ Revisão com Gemini concluída.\n🧠 Nível: {usuarios.get(user_id, {}).get('nivel_gemini', 'leve')}\n🧩 Trechos ajustados: {corrigidos}",
-                    read_timeout=180,
-                    write_timeout=180,
-                    connect_timeout=90,
-                    pool_timeout=90,
+            except (NetworkError, TimedOut):
+                await update.message.reply_text(
+                    "⚠️ O EPUB foi traduzido, mas o Telegram falhou ao enviar."
                 )
 
-            await atualizar_carregamento(msg, "🤖 Revisão com Gemini", 100, "✅ EPUB revisado e enviado.")
 
-        elif modo == "imagens":
-            if not nome_original.lower().endswith(".epub"):
-                await update.message.reply_text("⚠️ Envie apenas EPUB para traduzir/trocar imagens.")
-                return
+        if erros:
+            log_path = salvar_log(nome_final, erros)
 
-            msg = await update.message.reply_text("🖼 Preparando imagens do EPUB...")
-            await atualizar_carregamento(msg, "🖼 Traduzir / trocar imagens", 20, "📥 EPUB recebido. Procurando imagens...")
 
-            imagens = pegar_todas_imagens_epub(entrada, limite=30)
-
-            usuarios[user_id]["capa_entrada"] = str(entrada)
-            usuarios[user_id]["capa_nome_original"] = nome_original
-            usuarios[user_id]["capa_imagens"] = [img.file_name for img in imagens]
-            usuarios[user_id]["remover_imagens"] = []
-
-            await atualizar_carregamento(msg, "🖼 Traduzir / trocar imagens", 60, f"🖼 Encontrei {len(imagens)} imagem(ns). Enviando prévias...")
-
-            if not imagens:
-                await atualizar_carregamento(msg, "🖼 Traduzir / trocar imagens", 100, "⚠️ Não encontrei imagens no EPUB.")
-                return
-
-            for i, img in enumerate(imagens, start=1):
-                img_path = salvar_imagem_temp(img)
-
-                try:
-                    with open(img_path, "rb") as img_file:
-                        await update.message.reply_photo(
-                            photo=img_file,
-                            caption=f"🖼 Imagem {i}\nArquivo interno: {img.file_name}\n\nPara trocar/traduzir, toque em 🔁 Trocar imagem {i}.",
-                            reply_markup=InlineKeyboardMarkup([
-                                [
-                                    InlineKeyboardButton(f"🔁 Trocar imagem {i}", callback_data=f"trocar_img_{i}"),
-                                ],
-                                [
-                                    InlineKeyboardButton("✅ Manter", callback_data="manter_img"),
-                                    InlineKeyboardButton("📦 Finalizar edição", callback_data="finalizar_capa"),
-                                ],
-                            ]),
-                        )
-                except Exception as erro:
-                    await update.message.reply_text(f"⚠️ Não consegui enviar a imagem {i}:\n{erro}")
-
-                finally:
-                    img_path.unlink(missing_ok=True)
-
-            await atualizar_carregamento(
-                msg,
-                "🖼 Traduzir / trocar imagens",
-                100,
-                "✅ Imagens enviadas.\n\nEscolha 🔁 Trocar na imagem desejada, envie a imagem traduzida, e depois finalize.",
-            )
-
-            return
-
-        elif modo == "capa":
-            if not nome_original.lower().endswith(".epub"):
-                await update.message.reply_text("⚠️ Envie apenas EPUB para editar capa.")
-                return
-
-            msg = await update.message.reply_text("🖼 Preparando editor de capa...")
-            await atualizar_carregamento(msg, "🖼 Editor de capa", 20, "📥 EPUB recebido. Analisando início do livro...")
-
-            imagens = pegar_imagens_iniciais(entrada, limite=3)
-
-            usuarios[user_id]["capa_entrada"] = str(entrada)
-            usuarios[user_id]["capa_nome_original"] = nome_original
-            usuarios[user_id]["capa_imagens"] = [img.file_name for img in imagens]
-            usuarios[user_id]["remover_imagens"] = []
-
-            await atualizar_carregamento(msg, "🖼 Editor de capa", 70, "🖼 Separando capas/imagens iniciais...")
-
-            if not imagens:
-                await atualizar_carregamento(msg, "🖼 Editor de capa", 100, "⚠️ Não encontrei imagens no início do EPUB.")
-                return
-
-            for i, img in enumerate(imagens, start=1):
-                img_path = salvar_imagem_temp(img)
-
-                try:
-                    with open(img_path, "rb") as img_file:
-                        await update.message.reply_photo(
-                            photo=img_file,
-                            caption=f"🖼 Imagem inicial {i}\nArquivo interno: {img.file_name}",
-                            reply_markup=InlineKeyboardMarkup([
-                                [
-                                    InlineKeyboardButton(f"🗑 Remover imagem {i}", callback_data=f"remover_img_{i}"),
-                                    InlineKeyboardButton(f"🔁 Trocar imagem {i}", callback_data=f"trocar_img_{i}"),
-                                ],
-                                [
-                                    InlineKeyboardButton("✅ Manter", callback_data="manter_img"),
-                                    InlineKeyboardButton("📦 Finalizar edição", callback_data="finalizar_capa"),
-                                ],
-                            ]),
-                        )
-                except Exception as erro:
-                    await update.message.reply_text(f"⚠️ Não consegui enviar a imagem {i}:\n{erro}")
-
-                finally:
-                    img_path.unlink(missing_ok=True)
-
-            await atualizar_carregamento(
-                msg,
-                "🖼 Editor de capa",
-                100,
-                "✅ Imagens iniciais enviadas.\n\nAgora marque as imagens e aperte 📦 Finalizar edição.",
-            )
-
-            return
-
-        elif modo == "epub_pdf":
-            if not nome_original.lower().endswith(".epub"):
-                await update.message.reply_text("⚠️ Envie um arquivo EPUB.")
-                return
-
-            msg = await update.message.reply_text("🔄 Preparando conversão...")
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 15, "📥 EPUB recebido. Preparando Calibre...")
-
-            saida = TEMP_DIR / nome_pdf(nome_original)
-
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 45, "⚙️ Convertendo EPUB para PDF...")
-            converter_com_calibre(entrada, saida)
-
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 85, "📦 Preparando PDF para envio...")
-
-            with open(saida, "rb") as f:
-                await update.message.reply_document(
-                    document=InputFile(f, filename=nome_pdf(nome_original)),
-                    caption="✅ Conversão EPUB → PDF concluída.",
-                    read_timeout=180,
-                    write_timeout=180,
-                    connect_timeout=90,
-                    pool_timeout=90,
-                )
-
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 100, "✅ Conversão concluída e enviada.")
-
-        elif modo == "pdf_epub":
-            if not nome_original.lower().endswith(".pdf"):
-                await update.message.reply_text("⚠️ Envie um arquivo PDF.")
-                return
-
-            msg = await update.message.reply_text("🔄 Preparando conversão...")
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 15, "📥 PDF recebido. Preparando Calibre...")
-
-            saida = TEMP_DIR / nome_epub(nome_original)
-
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 45, "⚙️ Convertendo PDF para EPUB...")
-            converter_com_calibre(entrada, saida)
-
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 85, "📦 Preparando EPUB para envio...")
-
-            with open(saida, "rb") as f:
-                await update.message.reply_document(
-                    document=InputFile(f, filename=nome_epub(nome_original)),
-                    caption="✅ Conversão PDF → EPUB concluída.",
-                    read_timeout=180,
-                    write_timeout=180,
-                    connect_timeout=90,
-                    pool_timeout=90,
-                )
-
-            await atualizar_carregamento(msg, "🔄 Conversor Alma Scriptum", 100, "✅ Conversão concluída e enviada.")
-
-    except (TimedOut, NetworkError):
-        await update.message.reply_text("⚠️ O Telegram demorou responder. Se o arquivo apareceu acima, está tudo certo.")
+            if log_path and log_path.exists():
+                with open(log_path, "rb") as log_file:
+                    await update.message.reply_document(
+                        document=log_file,
+                        filename="Pontos de atenção ✦ Alma Scriptum.txt",
+                    )
+        else:
+            await update.message.reply_text("✅ EPUB entregue sem erros detectados.")
 
     except Exception as erro:
-        await update.message.reply_text(f"❌ Erro:\n{erro}")
+        await update.message.reply_text(f"❌ {erro}")
 
     finally:
         try:
-            if modo not in ["capa", "imagens"]:
-                entrada.unlink(missing_ok=True)
+            entrada.unlink(missing_ok=True)
+            saida.unlink(missing_ok=True)
 
-            if saida:
-                saida.unlink(missing_ok=True)
+            if saida_final:
+                saida_final.unlink(missing_ok=True)
+
+            if log_path:
+                log_path.unlink(missing_ok=True)
+
+            if capa_path:
+                capa_path.unlink(missing_ok=True)
 
         except Exception:
             pass
 
 
-async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    if not autorizado(user_id):
-        await update.message.reply_text("⛔ Você não tem acesso.")
-        return
-
-    modo = usuarios.get(user_id, {}).get("modo")
-
-    if modo != "aguardando_nova_capa":
-        await update.message.reply_text("⚠️ Escolha primeiro qual imagem deseja trocar.")
-        return
-
-    dados = usuarios.get(user_id, {})
-    entrada = dados.get("capa_entrada")
-    imagens = dados.get("capa_imagens", [])
-    indice = dados.get("imagem_escolhida")
-    nome_original = dados.get("capa_nome_original", "Livro.epub")
-
-    if not entrada or indice is None or indice < 0 or indice >= len(imagens):
-        await update.message.reply_text("⚠️ Não encontrei o EPUB base. Envie novamente.")
-        return
-
-    nome_imagem = imagens[indice]
-
-    foto = update.message.photo[-1]
-    arquivo = await foto.get_file()
-
-    nova_capa = TEMP_DIR / f"nova_capa_{uuid.uuid4().hex}.jpg"
-    await arquivo.download_to_drive(str(nova_capa))
-
-    saida = TEMP_DIR / nome_epub(nome_original)
-
-    msg = await update.message.reply_text("🔁 Preparando troca de capa...")
-
-    try:
-        await atualizar_carregamento(msg, "🔁 Trocando imagem", 40, "📥 Nova imagem recebida...")
-
-        with open(nova_capa, "rb") as f:
-            nova_bytes = f.read()
-
-        await atualizar_carregamento(msg, "🔁 Trocando imagem", 70, "🖼 Substituindo imagem escolhida...")
-
-        trocar_imagem_epub(entrada, saida, nome_imagem, nova_bytes)
-
-        await atualizar_carregamento(msg, "🔁 Trocando imagem", 90, "📦 Preparando EPUB atualizado...")
-
-        with open(saida, "rb") as f:
-            await update.message.reply_document(
-                document=InputFile(f, filename=nome_epub(nome_original)),
-                caption="✅ Imagem trocada e EPUB atualizado.",
-                read_timeout=180,
-                write_timeout=180,
-                connect_timeout=90,
-                pool_timeout=90,
-            )
-
-        await atualizar_carregamento(msg, "🔁 Trocando imagem", 100, "✅ Imagem trocada e enviada.")
-
-    except Exception as erro:
-        await update.message.reply_text(f"❌ Erro ao trocar capa:\n{erro}")
-
-    finally:
-        nova_capa.unlink(missing_ok=True)
-        saida.unlink(missing_ok=True)
-        limpar_sessao_capa(user_id)
+async def erro_global(update: object, context: ContextTypes.DEFAULT_TYPE):
+    print(f"Erro capturado: {context.error}")
 
 
 def main():
@@ -1431,12 +1449,12 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("cancelar", cancelar_cmd))
     app.add_handler(CallbackQueryHandler(botoes))
-    app.add_handler(MessageHandler(filters.PHOTO, receber_foto))
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
+    app.add_error_handler(erro_global)
 
-    print("✅ Alma Scriptum Studio ONLINE")
+    print("✅ Alma Scriptum Translate FALLBACK ONLINE!")
+
     app.run_polling()
 
 
