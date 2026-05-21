@@ -41,7 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 1800  # igual ao padrão do Ebook Translator/Calibre
+MERGE_LENGTH = 1800
 REQUEST_ATTEMPTS = 1
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
@@ -167,95 +167,55 @@ def revisar_texto_final(texto):
     if not texto:
         return texto
 
-    texto = html_lib.unescape(texto)
+    texto = html_lib.unescape(str(texto))
     texto = substituir_sites_por_marca(texto)
 
     texto = texto.replace("&quot;", '"')
     texto = texto.replace("&#39;", "'")
     texto = texto.replace("&amp;", "&")
 
-    correcoes = {
+    # Correções leves: só limpeza e erros MUITO comuns do Google.
+    # Não muda o sentido do texto em massa.
+    correcoes_simples = {
         "deTODOS": "de TODOS",
         "de TODOS.Cada": "de TODOS. Cada",
         "TODOS.Cada": "TODOS. Cada",
         "paraa": "para a",
-        "paraaNo": "para a No",
-        "paraaNa": "para a Na",
-        "passaEm": "passa em",
-        "se passaEm": "se passa em",
-        "completaincluindo": "completa incluindo",
         "incluindoo": "incluindo o",
         "incluindoa": "incluindo a",
-        "deda": "de da",
-        "dea": "de a",
-        "doa": "do a",
-        "daA": "da A",
-        "doO": "do O",
-        "noA": "no A",
-        "naA": "na A",
-        "emA": "em A",
-        "deA": "de A",
-        "emesse": "em esse",
-        "nessequarto": "nesse quarto",
-        "nesseambiente": "nesse ambiente",
-        "quememória": "que memória",
-        "quememoria": "que memória",
-        "caralhoquememória": "caralho, que memória",
-        "caralhoquememoria": "caralho, que memória",
-        "monitorese": "monitores e",
-        "perguntase": "pergunta se",
-        "resolvê-loAgora": "resolvê-lo. Agora",
-        "resolveloAgora": "resolvê-lo. Agora",
-        "seunúmero": "seu número",
-        "seunumero": "seu número",
-        "minhatristeza": "minha tristeza",
-        "ignorá-lasMAS": "ignorá-las. MAS",
-        "ignora-lasMAS": "ignorá-las. MAS",
         "bemEspero": "bem? Espero",
         "bem?Espero": "bem? Espero",
-        "físicasem": "física. Sem",
-        "fisicasem": "física. Sem",
-        "físicaSem": "física. Sem",
-        "semviolência": "sem violência",
-        "semviolencia": "sem violência",
-        "ok,tudo": "Ok, tudo",
-        "Ok,tudo": "Ok, tudo",
-        "eununcadeixarei": "eu nunca deixarei",
     }
 
-    for errado, certo in correcoes.items():
+    for errado, certo in correcoes_simples.items():
         texto = texto.replace(errado, certo)
 
-    texto = re.sub(
-        r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
-        r"\1 \2",
-        texto
-    )
-
-    palavras_comuns = [
-        "que", "quando", "porque", "mas", "então", "agora", "aqui", "ali",
-        "com", "sem", "para", "pela", "pelo", "nesse", "nessa", "naquele",
-        "naquela", "minha", "meu", "sua", "seu", "todos", "todas", "memória",
-        "memoria", "lembrança", "quarto", "casa", "telefone", "mensagem",
-        "pergunta", "resposta", "espero", "preciso", "violência", "violencia",
-        "física", "fisica", "incluindo", "experiência", "experiencia",
+    # Correções de contexto para cenas com arma/disparo.
+    # Evita o erro comum do Google traduzir "shot" como "chute".
+    correcoes_tiro = [
+        (r"\bO segundo chute sai para fora e bate\b", "O segundo tiro erra o alvo e se choca"),
+        (r"\bO segundo chute\b", "O segundo tiro"),
+        (r"\bo segundo chute\b", "o segundo tiro"),
+        (r"\bchute sai para fora\b", "tiro erra o alvo"),
+        (r"\bOutro chute\b", "Outro tiro"),
+        (r"\boutro chute\b", "outro tiro"),
+        (r"\boutra tomada\b", "outro tiro"),
+        (r"\bOutra tomada\b", "Outro tiro"),
+        (r"\bPreciso me mudar\b", "Preciso me mexer"),
+        (r"\bpreciso me mudar\b", "preciso me mexer"),
     ]
 
-    for palavra in palavras_comuns:
-        texto = re.sub(
-            rf"([a-záàâãéêíóôõúç]{{3,}})({palavra})\b",
-            r"\1 \2",
-            texto,
-            flags=re.IGNORECASE,
-        )
+    for errado, certo in correcoes_tiro:
+        texto = re.sub(errado, certo, texto, flags=re.IGNORECASE)
 
+    # Limpeza de espaços e pontuação, sem reescrever a tradução inteira.
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
     texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"([a-záàâãéêíóôõúç])([“\"])", r"\1 \2", texto)
-    texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
     texto = re.sub(r"\s+", " ", texto)
 
+    texto = substituir_sites_por_marca(texto)
     return texto.strip()
+
 
 
 def texto_sujo(texto):
@@ -473,9 +433,9 @@ def google_new_translate(texto):
     }
     data = {
         "params.client": "gtx",
-        "query.source_language": "auto",
+        "query.source_language": "en",
         "query.target_language": "pt",
-        "query.display_language": "en-US",
+        "query.display_language": "pt-BR",
         "data_types": "TRANSLATION",
         "key": "AIzaSyDLEeFI5OtFBwYBIoK_jj5m32rZK5CkCXA",
         "query.text": texto,
@@ -493,7 +453,7 @@ def google_html_translate(texto):
         "X-Goog-Api-Key": "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/133.0.0.0 Safari/537.36",
     }
-    body = json.dumps([[[texto], "auto", "pt"], "wt_lib"])
+    body = json.dumps([[[texto], "en", "pt"], "wt_lib"])
     resposta = request_url(url, data=body, headers=headers, method="POST")
     return json.loads(resposta)[0][0]
 
@@ -508,7 +468,7 @@ def google_old_translate(texto):
     }
     data = {
         "client": "gtx",
-        "sl": "auto",
+        "sl": "en",
         "tl": "pt",
         "dt": "t",
         "dj": 1,
@@ -558,17 +518,31 @@ def traduzir_com_retry(texto, mecanismo):
 
 
 def traduzir_com_fallback(texto, mecanismo):
-    """
-    Mantém o bloco inteiro, como o Ebook Translator do Calibre.
-    Antes o bot quebrava frase por frase quando dava falha; isso muda sentido
-    em palavras como "shot" e piora contexto/plural.
-    """
     traducao, erro = traduzir_com_retry(texto, mecanismo)
 
     if not erro:
         return traducao, None
 
-    return revisar_texto_final(texto), erro
+    partes = [texto]
+    traduzidas = []
+    falhas = 0
+
+    for parte in partes:
+        if not parte.strip():
+            continue
+
+        t, e = traduzir_com_retry(parte, mecanismo)
+
+        if e:
+            traduzidas.append(revisar_texto_final(parte))
+            falhas += 1
+        else:
+            traduzidas.append(t)
+
+    if falhas:
+        return " ".join(traduzidas), f"{falhas} frase(s) ficaram sem tradução"
+
+    return " ".join(traduzidas), None
 
 
 def criar_sep(i):
@@ -807,30 +781,16 @@ def limpar_texto_pre_traducao(texto):
 
 
 def bloco_traduzivel(tag):
-    """
-    Extração parecida com o Ebook Translator do Calibre:
-    pega elementos de texto principais e evita spans soltos.
-    Isso preserva mais contexto e reduz traduções erradas.
-    """
     if not tag or not getattr(tag, "name", None):
         return False
 
-    ignorar = ["script", "style", "code", "head", "meta", "link", "title"]
-    if tag.name in ignorar:
+    if tag.name in ["script", "style", "code", "pre", "head", "meta", "link", "title"]:
         return False
 
-    if tag.find(["img", "svg", "math", "script", "style"]):
+    if tag.find(["img", "svg", "math"]):
         return False
 
-    # Igual à ideia do Calibre: se tem outro bloco dentro, deixa o filho ser traduzido.
-    blocos_internos = [
-        "address", "blockquote", "dialog", "div", "figure", "figcaption",
-        "footer", "header", "legend", "main", "p", "pre", "article",
-        "aside", "h1", "h2", "h3", "h4", "h5", "h6", "section",
-        "dd", "dl", "dt", "menu", "ol", "ul", "table", "caption",
-        "thead", "tbody", "tfoot", "tr", "td", "th", "li"
-    ]
-    if tag.find(blocos_internos):
+    if tag.find(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"]):
         return False
 
     texto = tag.get_text(" ", strip=True)
@@ -841,22 +801,14 @@ def bloco_traduzivel(tag):
     if texto_sujo(texto):
         return False
 
-    # Filtro parecido com o plugin: ignora linhas só com número/pontuação.
-    if re.search(r"[A-Za-zÀ-ÿ]", texto) is None:
-        return False
-
-    if re.search(r"^[-\d\s\.\'\"‘’“”,=~!@#$%^&º*|≈<>?/`—…+:–_(){}\[\]]+$", texto):
+    if not re.search(r"[A-Za-z]", texto):
         return False
 
     return True
 
 
 def coletar_blocos_texto(soup):
-    # Não usar span aqui. O Calibre prioriza parágrafos/blocos, não pedacinhos inline.
-    candidatos = soup.find_all([
-        "p", "pre", "h1", "h2", "h3", "h4", "h5", "h6",
-        "blockquote", "li", "td", "th", "caption"
-    ])
+    candidatos = soup.find_all(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"])
     blocos = []
     contador = 1
 
@@ -875,7 +827,6 @@ def coletar_blocos_texto(soup):
     if blocos:
         return blocos
 
-    # Plano B: só se o EPUB não tiver parágrafos normais.
     for node in soup.find_all(string=True):
         if not texto_visivel(node):
             continue
