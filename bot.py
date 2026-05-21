@@ -41,7 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 1800
+MERGE_LENGTH = 2500
 REQUEST_ATTEMPTS = 1
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
@@ -225,6 +225,34 @@ def revisar_texto_final(texto):
 
     for errado, certo in correcoes.items():
         texto = texto.replace(errado, certo)
+
+    # Correções comuns de plural/contexto em tradução literal
+correcoes_regex = [
+    (r"\bVocê não pode me dizer que\b", "Vocês não podem me dizer que"),
+    (r"\bVocê não pode dizer que\b", "Vocês não podem dizer que"),
+    (r"\bVocê estava pensando\b", "Vocês estavam pensando"),
+    (r"\bvocê estava pensando\b", "vocês estavam pensando"),
+    (r"\bvocê estava jogando\b", "vocês estavam jogando"),
+
+    (r"\bgarotas nerd\b", "garotas nerds"),
+    (r"\bminhas garota\b", "minhas garotas"),
+
+    (r"\bCorpos humanos não foi feito\b", "Corpos humanos não foram feitos"),
+
+    (r"\bEles era\b", "Eles eram"),
+    (r"\bEles estava\b", "Eles estavam"),
+
+    # NOVAS
+    (r"\bNao\b", "Não"),
+    (r"\bvoce\b", "você"),
+    (r"\bVoce\b", "Você"),
+    (r"\bpra a\b", "para a"),
+    (r"\bpra o\b", "para o"),
+]
+
+for errado, certo in correcoes_regex:
+    texto = re.sub(errado, certo, texto, flags=re.IGNORECASE)
+    
 
     texto = re.sub(
         r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
