@@ -42,6 +42,9 @@ usuarios = {}
 cancelamentos = set()
 
 MERGE_LENGTH = 1800
+# O plugin Ebook Translator usa separador de parágrafo por duas quebras de linha.
+# Mantemos isso para ficar mais parecido com o Calibre.
+CALIBRE_SEPARATOR = "\n\n"
 REQUEST_ATTEMPTS = 1
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
@@ -159,11 +162,18 @@ def substituir_sites_por_marca(texto):
     for p in padroes:
         texto = re.sub(p, "", texto, flags=re.IGNORECASE)
 
+    texto = re.sub(r"https?://(?:www\.)?(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"www\.(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
     texto = re.sub(r"\s{2,}", " ", texto)
     return texto.strip()
 
 
 def revisar_texto_final(texto):
+    """
+    Pós-processamento mínimo, estilo Calibre.
+    Aqui NÃO fazemos correções agressivas de tradução, porque isso pode piorar
+    o sentido. Apenas limpamos entidades, sites e espaçamento quebrado.
+    """
     if not texto:
         return texto
 
@@ -174,50 +184,13 @@ def revisar_texto_final(texto):
     texto = texto.replace("&#39;", "'")
     texto = texto.replace("&amp;", "&")
 
-    # Correções leves: só limpeza e erros MUITO comuns do Google.
-    # Não muda o sentido do texto em massa.
-    correcoes_simples = {
-        "deTODOS": "de TODOS",
-        "de TODOS.Cada": "de TODOS. Cada",
-        "TODOS.Cada": "TODOS. Cada",
-        "paraa": "para a",
-        "incluindoo": "incluindo o",
-        "incluindoa": "incluindo a",
-        "bemEspero": "bem? Espero",
-        "bem?Espero": "bem? Espero",
-    }
-
-    for errado, certo in correcoes_simples.items():
-        texto = texto.replace(errado, certo)
-
-    # Correções de contexto para cenas com arma/disparo.
-    # Evita o erro comum do Google traduzir "shot" como "chute".
-    correcoes_tiro = [
-        (r"\bO segundo chute sai para fora e bate\b", "O segundo tiro erra o alvo e se choca"),
-        (r"\bO segundo chute\b", "O segundo tiro"),
-        (r"\bo segundo chute\b", "o segundo tiro"),
-        (r"\bchute sai para fora\b", "tiro erra o alvo"),
-        (r"\bOutro chute\b", "Outro tiro"),
-        (r"\boutro chute\b", "outro tiro"),
-        (r"\boutra tomada\b", "outro tiro"),
-        (r"\bOutra tomada\b", "Outro tiro"),
-        (r"\bPreciso me mudar\b", "Preciso me mexer"),
-        (r"\bpreciso me mudar\b", "preciso me mexer"),
-    ]
-
-    for errado, certo in correcoes_tiro:
-        texto = re.sub(errado, certo, texto, flags=re.IGNORECASE)
-
-    # Limpeza de espaços e pontuação, sem reescrever a tradução inteira.
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
     texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([“\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([A-Za-zÀ-ÿ])([”\"])", r"\1\2", texto)
     texto = re.sub(r"\s+", " ", texto)
 
-    texto = substituir_sites_por_marca(texto)
     return texto.strip()
-
-
-
 def texto_sujo(texto):
     if not texto:
         return True
@@ -550,37 +523,55 @@ def criar_sep(i):
 
 
 def separar_por_sep(texto, quantidade):
-    partes = [texto]
+    """
+    Alinhamento parecido com o plugin do Calibre:
+    ele junta trechos usando duas quebras de linha e depois separa de volta.
+    """
+    if quantidade <= 1:
+        return [revisar_texto_final(texto)] if texto and texto.strip() else []
 
-    for i in range(quantidade - 1):
-        pattern = r"\{\{\s*id\s*_\s*" + format(i, "05") + r"\s*\}\}"
-        novo = []
+    partes = [p.strip() for p in re.split(r"\n\s*\n+", texto) if p.strip()]
 
-        for parte in partes:
-            novo.extend(re.split(pattern, parte, maxsplit=1))
+    if len(partes) == quantidade:
+        return partes
 
-        partes = novo
+    if len(partes) > quantidade:
+        return partes[:quantidade - 1] + ["\n\n".join(partes[quantidade - 1:])]
 
-    partes = [
-        re.sub(r"\{\{\s*id\s*_\s*\d+\s*\}\}", "", p).strip()
-        for p in partes
-    ]
+    return partes
+def precisa_alerta_revisao(original, texto_final):
+    """Evita ponto de atenção falso. Só avisa quando sobrou inglês/site/lixo."""
+    if not texto_final or texto_sujo(texto_final):
+        return False
 
-    return [p for p in partes if p]
+    if re.search(r"oceanofpdf|z-library|1lib|z-lib|ocean\s*pdf", texto_final, flags=re.I):
+        return True
 
+    if re.search(r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}", texto_final):
+        return True
+
+    palavras_ingles = re.findall(
+        r"\b(the|and|with|your|you|she|he|they|this|that|was|were|have|from|into|would|could|should|because|before|after|when|where|what)\b",
+        texto_final,
+        flags=re.I,
+    )
+    if len(palavras_ingles) >= 2 and not parece_nome_proprio_ou_lugar(texto_final):
+        return True
+
+    if texto_final.strip().lower() == str(original).strip().lower():
+        if re.search(r"\b(the|and|with|you|your|she|he|they|was|were|from)\b", original, flags=re.I):
+            return True
+
+    return False
 
 def traduzir_bloco_sync(item):
     bloco_id, textos, mecanismo = item
 
     textos = [substituir_sites_por_marca(t) for t in textos]
 
-    junto = ""
-
-    for i, texto in enumerate(textos):
-        junto += texto
-
-        if i < len(textos) - 1:
-            junto += "\n\n" + criar_sep(i) + "\n\n"
+    # Igual ao Ebook Translator/Calibre: junta com duas quebras de linha,
+    # em vez de marcador artificial {{id_00000}} no meio do texto.
+    junto = CALIBRE_SEPARATOR.join(textos)
 
     traducao, erro = traduzir_com_retry(junto, mecanismo)
 
@@ -610,39 +601,11 @@ def traduzir_bloco_sync(item):
         # se REALMENTE sobrou problema
         if e:
 
-            ainda_tem_ingles = bool(re.search(
-                r"\b(the|and|with|you|your|she|he|they|this|that|was|were|have|from|into|would|could|should)\b",
-                texto_final,
-                flags=re.IGNORECASE
-            ))
-
-            palavra_grudada = bool(re.search(
-                r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}",
-                texto_final
-            ))
-
-            site_sobrou = bool(re.search(
-                r"oceanofpdf|z-library|1lib|z-lib",
-                texto_final,
-                flags=re.IGNORECASE
-            ))
-
-            texto_igual_original = (
-                texto_final.strip().lower() ==
-                texto.strip().lower()
-            )
-
-            if (
-                ainda_tem_ingles
-                or palavra_grudada
-                or site_sobrou
-                or texto_igual_original
-            ) and not parece_nome_proprio_ou_lugar(texto_final):
-
+            if precisa_alerta_revisao(texto, texto_final):
                 erros.append({
                     "bloco": bloco_id,
                     "trecho_num": idx,
-                    "motivo": "precisa de revisão manual",
+                    "motivo": "sobrou inglês/site/lixo técnico",
                     "texto": texto_curto(texto_final),
                 })
 
@@ -808,17 +771,52 @@ def bloco_traduzivel(tag):
 
 
 def coletar_blocos_texto(soup):
-    candidatos = soup.find_all(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"])
+    """
+    Extração no estilo do Ebook Translator do Calibre.
+    Prioriza parágrafos e blocos reais, não spans soltos.
+    Isso evita perder contexto e reduz erro tipo shot -> chute.
+    """
+    tags_prioritarias = [
+        "p", "pre", "blockquote",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "li", "td", "th", "caption",
+    ]
+    tags_blocos = set(tags_prioritarias + ["div", "section", "article", "main"])
     blocos = []
     contador = 1
 
+    def tem_bloco_filho(tag):
+        for filho in tag.find_all(tags_blocos):
+            if filho is not tag:
+                return True
+        return False
+
+    candidatos = soup.find_all(tags_prioritarias + ["div"])
+
     for tag in candidatos:
-        if not bloco_traduzivel(tag):
+        if not getattr(tag, "name", None):
             continue
 
-        texto = limpar_texto_pre_traducao(tag.get_text(" ", strip=True))
+        if tag.name in ["script", "style", "code", "head", "meta", "link", "title"]:
+            continue
 
-        if not texto or len(texto) < 2:
+        if tag.name == "div" and tem_bloco_filho(tag):
+            continue
+
+        texto_bruto = tag.get_text(" ", strip=True)
+        if not texto_bruto or len(texto_bruto.strip()) < 2:
+            continue
+
+        if texto_sujo(texto_bruto):
+            continue
+
+        if not re.search(r"[A-Za-z]", texto_bruto):
+            continue
+
+        texto = limpar_texto_pre_traducao(texto_bruto)
+        texto = substituir_sites_por_marca(texto)
+
+        if not texto or len(texto.strip()) < 2:
             continue
 
         blocos.append((contador, tag, texto))
@@ -832,6 +830,7 @@ def coletar_blocos_texto(soup):
             continue
 
         texto = limpar_texto_pre_traducao(str(node))
+        texto = substituir_sites_por_marca(texto)
 
         if len(texto.strip()) < 2:
             continue
@@ -840,8 +839,6 @@ def coletar_blocos_texto(soup):
         contador += 1
 
     return blocos
-
-
 def substituir_texto_no_item(item_html, texto_final):
     if hasattr(item_html, "clear") and hasattr(item_html, "append"):
         item_html.clear()
