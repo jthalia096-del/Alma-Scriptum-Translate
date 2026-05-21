@@ -41,7 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 2500
+MERGE_LENGTH = 6000
 REQUEST_ATTEMPTS = 1
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
@@ -225,34 +225,6 @@ def revisar_texto_final(texto):
 
     for errado, certo in correcoes.items():
         texto = texto.replace(errado, certo)
-
-    # Correções comuns de plural/contexto em tradução literal
-correcoes_regex = [
-    (r"\bVocê não pode me dizer que\b", "Vocês não podem me dizer que"),
-    (r"\bVocê não pode dizer que\b", "Vocês não podem dizer que"),
-    (r"\bVocê estava pensando\b", "Vocês estavam pensando"),
-    (r"\bvocê estava pensando\b", "vocês estavam pensando"),
-    (r"\bvocê estava jogando\b", "vocês estavam jogando"),
-
-    (r"\bgarotas nerd\b", "garotas nerds"),
-    (r"\bminhas garota\b", "minhas garotas"),
-
-    (r"\bCorpos humanos não foi feito\b", "Corpos humanos não foram feitos"),
-
-    (r"\bEles era\b", "Eles eram"),
-    (r"\bEles estava\b", "Eles estavam"),
-
-    # NOVAS
-    (r"\bNao\b", "Não"),
-    (r"\bvoce\b", "você"),
-    (r"\bVoce\b", "Você"),
-    (r"\bpra a\b", "para a"),
-    (r"\bpra o\b", "para o"),
-]
-
-for errado, certo in correcoes_regex:
-    texto = re.sub(errado, certo, texto, flags=re.IGNORECASE)
-    
 
     texto = re.sub(
         r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
@@ -537,7 +509,7 @@ def google_old_translate(texto):
     data = {
         "client": "gtx",
         "sl": "en",
-        "tl": "pt",
+        "tl": "pt-BR",
         "dt": "t",
         "dj": 1,
         "q": texto,
@@ -591,7 +563,7 @@ def traduzir_com_fallback(texto, mecanismo):
     if not erro:
         return traducao, None
 
-    partes = re.split(r"(?<=[.!?])\s+", texto)
+    partes = [texto]
     traduzidas = []
     falhas = 0
 
@@ -876,7 +848,7 @@ def bloco_traduzivel(tag):
 
 
 def coletar_blocos_texto(soup):
-    candidatos = soup.find_all(["p", "div", "span", "li", "blockquote", "h1", "h2", "h3", "h4"])
+    candidatos = soup.find_all(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"])
     blocos = []
     contador = 1
 
@@ -1507,7 +1479,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_html"}
 
     mecanismo = usuarios[user_id]["mecanismo"]
     marca = "✅ Ativada" if usuarios[user_id]["marca"] else "❌ Desativada"
@@ -1539,7 +1511,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_html"}
 
     if query.data == "set_google_new":
         usuarios[user_id]["mecanismo"] = "google_new"
@@ -1583,7 +1555,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancelamentos.discard(user_id)
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_html"}
 
     documento = update.message.document
 
