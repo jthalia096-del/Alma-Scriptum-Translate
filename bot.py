@@ -41,7 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 6000
+MERGE_LENGTH = 1800  # igual ao padrão do Ebook Translator/Calibre
 REQUEST_ATTEMPTS = 1
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
@@ -473,9 +473,9 @@ def google_new_translate(texto):
     }
     data = {
         "params.client": "gtx",
-        "query.source_language": "en",
+        "query.source_language": "auto",
         "query.target_language": "pt",
-        "query.display_language": "pt-BR",
+        "query.display_language": "en-US",
         "data_types": "TRANSLATION",
         "key": "AIzaSyDLEeFI5OtFBwYBIoK_jj5m32rZK5CkCXA",
         "query.text": texto,
@@ -493,7 +493,7 @@ def google_html_translate(texto):
         "X-Goog-Api-Key": "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/133.0.0.0 Safari/537.36",
     }
-    body = json.dumps([[[texto], "en", "pt"], "wt_lib"])
+    body = json.dumps([[[texto], "auto", "pt"], "wt_lib"])
     resposta = request_url(url, data=body, headers=headers, method="POST")
     return json.loads(resposta)[0][0]
 
@@ -508,8 +508,8 @@ def google_old_translate(texto):
     }
     data = {
         "client": "gtx",
-        "sl": "en",
-        "tl": "pt-BR",
+        "sl": "auto",
+        "tl": "pt",
         "dt": "t",
         "dj": 1,
         "q": texto,
@@ -558,31 +558,17 @@ def traduzir_com_retry(texto, mecanismo):
 
 
 def traduzir_com_fallback(texto, mecanismo):
+    """
+    Mantém o bloco inteiro, como o Ebook Translator do Calibre.
+    Antes o bot quebrava frase por frase quando dava falha; isso muda sentido
+    em palavras como "shot" e piora contexto/plural.
+    """
     traducao, erro = traduzir_com_retry(texto, mecanismo)
 
     if not erro:
         return traducao, None
 
-    partes = [texto]
-    traduzidas = []
-    falhas = 0
-
-    for parte in partes:
-        if not parte.strip():
-            continue
-
-        t, e = traduzir_com_retry(parte, mecanismo)
-
-        if e:
-            traduzidas.append(revisar_texto_final(parte))
-            falhas += 1
-        else:
-            traduzidas.append(t)
-
-    if falhas:
-        return " ".join(traduzidas), f"{falhas} frase(s) ficaram sem tradução"
-
-    return " ".join(traduzidas), None
+    return revisar_texto_final(texto), erro
 
 
 def criar_sep(i):
@@ -821,16 +807,30 @@ def limpar_texto_pre_traducao(texto):
 
 
 def bloco_traduzivel(tag):
+    """
+    Extração parecida com o Ebook Translator do Calibre:
+    pega elementos de texto principais e evita spans soltos.
+    Isso preserva mais contexto e reduz traduções erradas.
+    """
     if not tag or not getattr(tag, "name", None):
         return False
 
-    if tag.name in ["script", "style", "code", "pre", "head", "meta", "link", "title"]:
+    ignorar = ["script", "style", "code", "head", "meta", "link", "title"]
+    if tag.name in ignorar:
         return False
 
-    if tag.find(["img", "svg", "math"]):
+    if tag.find(["img", "svg", "math", "script", "style"]):
         return False
 
-    if tag.find(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"]):
+    # Igual à ideia do Calibre: se tem outro bloco dentro, deixa o filho ser traduzido.
+    blocos_internos = [
+        "address", "blockquote", "dialog", "div", "figure", "figcaption",
+        "footer", "header", "legend", "main", "p", "pre", "article",
+        "aside", "h1", "h2", "h3", "h4", "h5", "h6", "section",
+        "dd", "dl", "dt", "menu", "ol", "ul", "table", "caption",
+        "thead", "tbody", "tfoot", "tr", "td", "th", "li"
+    ]
+    if tag.find(blocos_internos):
         return False
 
     texto = tag.get_text(" ", strip=True)
@@ -841,14 +841,22 @@ def bloco_traduzivel(tag):
     if texto_sujo(texto):
         return False
 
-    if not re.search(r"[A-Za-z]", texto):
+    # Filtro parecido com o plugin: ignora linhas só com número/pontuação.
+    if re.search(r"[A-Za-zÀ-ÿ]", texto) is None:
+        return False
+
+    if re.search(r"^[-\d\s\.\'\"‘’“”,=~!@#$%^&º*|≈<>?/`—…+:–_(){}\[\]]+$", texto):
         return False
 
     return True
 
 
 def coletar_blocos_texto(soup):
-    candidatos = soup.find_all(["p", "div", "li", "blockquote", "h1", "h2", "h3", "h4"])
+    # Não usar span aqui. O Calibre prioriza parágrafos/blocos, não pedacinhos inline.
+    candidatos = soup.find_all([
+        "p", "pre", "h1", "h2", "h3", "h4", "h5", "h6",
+        "blockquote", "li", "td", "th", "caption"
+    ])
     blocos = []
     contador = 1
 
@@ -867,6 +875,7 @@ def coletar_blocos_texto(soup):
     if blocos:
         return blocos
 
+    # Plano B: só se o EPUB não tiver parágrafos normais.
     for node in soup.find_all(string=True):
         if not texto_visivel(node):
             continue
@@ -1479,7 +1488,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_html"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
     mecanismo = usuarios[user_id]["mecanismo"]
     marca = "✅ Ativada" if usuarios[user_id]["marca"] else "❌ Desativada"
@@ -1511,7 +1520,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_html"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
     if query.data == "set_google_new":
         usuarios[user_id]["mecanismo"] = "google_new"
@@ -1555,7 +1564,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancelamentos.discard(user_id)
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_html"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
     documento = update.message.document
 
