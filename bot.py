@@ -1329,23 +1329,16 @@ async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
     try:
         porcentagem = int((i / total) * 100)
         barra = barra_progresso(porcentagem)
+
         await mensagem.edit_text(
-            f"📚 Alma Scriptum Translate
-
-"
-            f"⚙️ Mecanismo: {nome_mecanismo(mecanismo)}
-"
-            f"📖 Arquivo interno: {i}/{total}
-"
-            f"📊 Progresso: {porcentagem}%
-
-"
-            f"{barra}
-
-"
-            f"✨ Traduzindo... aguarde.
-"
-            f"📝 Pontos de atenção serão enviados em TXT junto com o EPUB."
+            f"📚 Alma Scriptum Translate\n\n"
+            f"⚙️ Mecanismo: {nome_mecanismo(mecanismo)}\n"
+            f"📖 Arquivo interno: {i}/{total}\n"
+            f"📊 Progresso: {porcentagem}%\n\n"
+            f"{barra}\n\n"
+            f"✨ Traduzindo... aguarde.\n"
+            f"🧾 Registro: {len(erros)} ponto(s) encontrado(s).\n"
+            f"📄 O TXT final vai trazer somente palavras/frases possivelmente não traduzidas."
         )
     except Exception:
         pass
@@ -1366,49 +1359,28 @@ def salvar_log(nome_base, erros):
     caminho = TEMP_DIR / f"palavras_nao_traduzidas_{uuid.uuid4().hex}.txt"
 
     with open(caminho, "w", encoding="utf-8") as f:
-        f.write("PALAVRAS / FRASES POSSIVELMENTE NÃO TRADUZIDAS — ALMA SCRIPTUM
-")
-        f.write(f"Livro: {nome_base}
-")
-        f.write("=" * 70 + "
-
-")
+        f.write("PALAVRAS / FRASES POSSIVELMENTE NÃO TRADUZIDAS — ALMA SCRIPTUM\n")
+        f.write(f"Livro: {nome_base}\n")
+        f.write("=" * 70 + "\n\n")
 
         for i, erro in enumerate(apenas_nao_traduzidos, start=1):
-            f.write(f"PONTO {i}
-")
-            f.write("-" * 70 + "
-")
-            f.write(f"Arquivo interno: {erro.get('arquivo', 'não identificado')}
-")
-            f.write(f"Capítulo: {erro.get('capitulo', 'Capítulo não identificado')}
-")
-            f.write(f"Palavra/frase possível: {erro.get('nao_traduzidos', '')}
-")
+            f.write(f"PONTO {i}\n")
+            f.write("-" * 70 + "\n")
+            f.write(f"Arquivo interno: {erro.get('arquivo', 'não identificado')}\n")
+            f.write(f"Capítulo: {erro.get('capitulo', 'Capítulo não identificado')}\n")
+            f.write(f"Palavra/frase possível: {erro.get('nao_traduzidos', '')}\n")
 
             if erro.get("original"):
-                f.write("
-Original:
-")
-                f.write(str(erro.get("original", "")).strip() + "
-")
+                f.write("\nOriginal:\n")
+                f.write(str(erro.get("original", "")).strip() + "\n")
 
             if erro.get("traducao"):
-                f.write("
-Tradução:
-")
-                f.write(str(erro.get("traducao", "")).strip() + "
-")
+                f.write("\nTradução:\n")
+                f.write(str(erro.get("traducao", "")).strip() + "\n")
 
-            f.write("
-" + "=" * 70 + "
-
-")
+            f.write("\n" + "=" * 70 + "\n\n")
 
     return caminho
-
-
-
 
 
 def _normalizar_zip_path(caminho):
