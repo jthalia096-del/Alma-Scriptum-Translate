@@ -41,9 +41,12 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 2400
-REQUEST_ATTEMPTS = 2
-REQUEST_TIMEOUT = 25
+MERGE_LENGTH = 2600
+# O plugin Ebook Translator usa separador de parágrafo por duas quebras de linha.
+# Mantemos isso para ficar mais parecido com o Calibre.
+CALIBRE_SEPARATOR = "\n\n"
+REQUEST_ATTEMPTS = 1
+REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 0.005
 
 CONFIGS = {
@@ -138,128 +141,148 @@ def substituir_sites_por_marca(texto):
     if not texto:
         return texto
 
-    texto = str(texto)
-
     padroes = [
-        r"Ocean\s*of\s*PDF\.?\s*com",
-        r"OceanofPDF\.?\s*com",
-        r"OceanPDF\.?\s*com",
+        r"OceanofPDF\.com",
+        r"OceanOfPDF\.com",
+        r"OceanPDF\.com",
         r"oceanofpdf\.com",
         r"oceanofpdf",
         r"OceanofPDF",
-        r"Ocean\s*Of\s*PDF",
-        r"Ocean\s*PDF",
-        r"z[\s\-_]*library(?:\.[a-z]{2,})?",
-        r"z[\s\-_]*lib(?:\.[a-z]{2,})?",
+        r"Ocean Of PDF",
+        r"Ocean PDF",
+        r"z-library\.sk",
+        r"z-library",
         r"zlib",
-        r"1lib(?:\.[a-z]{2,})?",
-        r"libgen(?:\.[a-z]{2,})?",
-        r"anna['’]?s[\s\-_]*archive",
-        r"https?://(?:www\.)?(?:oceanofpdf|z-library|z-lib|1lib|libgen|wattpad|img\.wattpad)[^\s<>'\"]*",
-        r"www\.(?:oceanofpdf|z-library|z-lib|1lib|libgen|wattpad)[^\s<>'\"]*",
+        r"1lib\.sk",
+        r"1lib",
+        r"z-lib\.org",
+        r"z-lib",
     ]
 
     for p in padroes:
         texto = re.sub(p, "", texto, flags=re.IGNORECASE)
 
-    texto = re.sub(r"\b[A-Za-z0-9]{60,}\b", "", texto)
-    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
+    texto = re.sub(r"https?://(?:www\.)?(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"www\.(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
     texto = re.sub(r"\s{2,}", " ", texto)
     return texto.strip()
 
+
 def revisar_texto_final(texto):
+    """
+    Pós-processamento mínimo, estilo Calibre.
+    Aqui NÃO fazemos correções agressivas de tradução, porque isso pode piorar
+    o sentido. Apenas limpamos entidades, sites e espaçamento quebrado.
+    """
     if not texto:
         return texto
 
-    texto = html_lib.unescape(texto)
+    texto = html_lib.unescape(str(texto))
     texto = substituir_sites_por_marca(texto)
 
     texto = texto.replace("&quot;", '"')
     texto = texto.replace("&#39;", "'")
     texto = texto.replace("&amp;", "&")
 
+    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
+    texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([“\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([A-Za-zÀ-ÿ])([”\"])", r"\1\2", texto)
+    texto = re.sub(r"\s+", " ", texto)
+
+    return texto.strip()
+
+def detectar_contexto_original(texto):
+    """Detecta contexto no texto original para corrigir ambiguidades."""
+    t = str(texto or "").lower()
+
+    armas = [
+        "gun", "guns", "shot", "shots", "shoot", "shooting", "shooter",
+        "fired", "firearm", "rifle", "pistol", "revolver", "bullet",
+        "bullets", "trigger", "barrel", "ammo", "weapon", "weapons",
+        "aim", "aimed", "target", "missed", "hit", "muzzle", "holster"
+    ]
+
+    futebol = [
+        "soccer", "football", "goal", "ball", "kick", "kicked",
+        "field", "goalkeeper", "match", "team", "penalty"
+    ]
+
+    contexto = set()
+
+    if sum(1 for p in armas if re.search(rf"\b{re.escape(p)}\b", t)) >= 1:
+        contexto.add("armas")
+
+    if sum(1 for p in futebol if re.search(rf"\b{re.escape(p)}\b", t)) >= 2:
+        contexto.add("futebol")
+
+    return contexto
+
+
+def corrigir_coerencia_contextual(original, traduzido):
+    """Correção leve pós-tradução baseada no original."""
+    if not traduzido:
+        return traduzido
+
+    texto = str(traduzido)
+    original_l = str(original or "").lower()
+    contexto = detectar_contexto_original(original)
+
+    if "armas" in contexto and "futebol" not in contexto:
+        if re.search(r"\bshot(s)?\b", original_l) or re.search(r"\bfired\b", original_l):
+            texto = re.sub(r"\bchute\b", "tiro", texto, flags=re.I)
+            texto = re.sub(r"\bchutes\b", "tiros", texto, flags=re.I)
+            texto = re.sub(r"\bpontapé\b", "tiro", texto, flags=re.I)
+            texto = re.sub(r"\bpontapés\b", "tiros", texto, flags=re.I)
+
+        if re.search(r"\bmissed\b", original_l):
+            texto = re.sub(r"\bsaiu para fora\b", "errou o alvo", texto, flags=re.I)
+            texto = re.sub(r"\berrou\b(?! o alvo)", "errou o alvo", texto, flags=re.I)
+
     correcoes = {
         "deTODOS": "de TODOS",
-        "de TODOS.Cada": "de TODOS. Cada",
         "TODOS.Cada": "TODOS. Cada",
-        "paraa": "para a",
-        "paraaNo": "para a No",
-        "paraaNa": "para a Na",
-        "passaEm": "passa em",
-        "se passaEm": "se passa em",
-        "completaincluindo": "completa incluindo",
-        "incluindoo": "incluindo o",
-        "incluindoa": "incluindo a",
-        "deda": "de da",
-        "dea": "de a",
-        "doa": "do a",
-        "daA": "da A",
-        "doO": "do O",
-        "noA": "no A",
-        "naA": "na A",
-        "emA": "em A",
-        "deA": "de A",
-        "emesse": "em esse",
-        "nessequarto": "nesse quarto",
-        "nesseambiente": "nesse ambiente",
-        "quememória": "que memória",
-        "quememoria": "que memória",
-        "caralhoquememória": "caralho, que memória",
-        "caralhoquememoria": "caralho, que memória",
-        "monitorese": "monitores e",
-        "perguntase": "pergunta se",
-        "resolvê-loAgora": "resolvê-lo. Agora",
-        "resolveloAgora": "resolvê-lo. Agora",
-        "seunúmero": "seu número",
-        "seunumero": "seu número",
-        "minhatristeza": "minha tristeza",
-        "ignorá-lasMAS": "ignorá-las. MAS",
-        "ignora-lasMAS": "ignorá-las. MAS",
+        "processo.A": "processo. A",
+        "trama.Bruxas": "trama. Bruxas",
+        "completaPara": "completa. Para",
         "bemEspero": "bem? Espero",
-        "bem?Espero": "bem? Espero",
-        "físicasem": "física. Sem",
-        "fisicasem": "física. Sem",
         "físicaSem": "física. Sem",
+        "fisicaSem": "física. Sem",
         "semviolência": "sem violência",
         "semviolencia": "sem violência",
-        "ok,tudo": "Ok, tudo",
-        "Ok,tudo": "Ok, tudo",
-        "eununcadeixarei": "eu nunca deixarei",
+        "lágri mas": "lágrimas",
+        "lá gri mas": "lágrimas",
+        "gr ito": "grito",
+        "TO grito": "O grito",
+        "TO gr ito": "O grito",
+        "T O grito": "O grito",
+        "memó ria": "memória",
+        "fí sica": "física",
+        "rá pido": "rápido",
+        "cére bro": "cérebro",
+        "conse guir": "conseguir",
+        "sozin has": "sozinhas",
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
     }
 
     for errado, certo in correcoes.items():
         texto = texto.replace(errado, certo)
 
-    texto = re.sub(
-        r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
-        r"\1 \2",
-        texto
-    )
-
-    palavras_comuns = [
-        "que", "quando", "porque", "mas", "então", "agora", "aqui", "ali",
-        "com", "sem", "para", "pela", "pelo", "nesse", "nessa", "naquele",
-        "naquela", "minha", "meu", "sua", "seu", "todos", "todas", "memória",
-        "memoria", "lembrança", "quarto", "casa", "telefone", "mensagem",
-        "pergunta", "resposta", "espero", "preciso", "violência", "violencia",
-        "física", "fisica", "incluindo", "experiência", "experiencia",
-    ]
-
-    for palavra in palavras_comuns:
-        texto = re.sub(
-            rf"([a-záàâãéêíóôõúç]{{3,}})({palavra})\b",
-            r"\1 \2",
-            texto,
-            flags=re.IGNORECASE,
-        )
-
+    texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", texto)
+    texto = re.sub(r"([.!?;:])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇA-Za-zÀ-ÿ])", r"\1 \2", texto)
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
-    texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"([a-záàâãéêíóôõúç])([“\"])", r"\1 \2", texto)
-    texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"\s+", " ", texto)
+    texto = re.sub(r"\s{2,}", " ", texto)
 
     return texto.strip()
+
+
+def preparar_contexto_para_traducao(textos):
+    """Junta parágrafos com separador do estilo Calibre."""
+    limpos = []
+    for t in textos:
+        limpos.append(limpar_texto_pre_traducao(substituir_sites_por_marca(t)))
+    return CALIBRE_SEPARATOR.join(limpos), limpos
 
 
 def texto_sujo(texto):
@@ -567,7 +590,7 @@ def traduzir_com_fallback(texto, mecanismo):
     if not erro:
         return traducao, None
 
-    partes = re.split(r"(?<=[.!?])\s+", texto)
+    partes = [texto]
     traduzidas = []
     falhas = 0
 
@@ -589,254 +612,91 @@ def traduzir_com_fallback(texto, mecanismo):
     return " ".join(traduzidas), None
 
 
-
-def detectar_contexto_original(texto):
-    t = str(texto or "").lower()
-
-    armas = [
-        "gun", "guns", "shot", "shots", "shoot", "shooting", "shooter",
-        "fired", "firearm", "rifle", "pistol", "revolver", "bullet",
-        "bullets", "trigger", "barrel", "ammo", "ammunition", "weapon",
-        "weapons", "aim", "aimed", "target", "missed", "hit", "muzzle",
-        "holster", "silencer", "reload", "blood", "ducked", "cover"
-    ]
-
-    futebol = [
-        "soccer", "football", "goal", "ball", "kick", "kicked", "kicking",
-        "field", "goalkeeper", "match", "team", "penalty"
-    ]
-
-    contexto = set()
-
-    if sum(1 for p in armas if re.search(rf"\b{re.escape(p)}\b", t)) >= 1:
-        contexto.add("armas")
-
-    if sum(1 for p in futebol if re.search(rf"\b{re.escape(p)}\b", t)) >= 2:
-        contexto.add("futebol")
-
-    return contexto
-
-
-def corrigir_coerencia_contextual(original, traduzido):
-    if not traduzido:
-        return traduzido
-
-    texto = str(traduzido)
-    original_l = str(original or "").lower()
-    contexto = detectar_contexto_original(original)
-
-    if "armas" in contexto and "futebol" not in contexto:
-        if re.search(r"\bshot(s)?\b", original_l) or re.search(r"\bfired\b", original_l):
-            texto = re.sub(r"\bchute\b", "tiro", texto, flags=re.I)
-            texto = re.sub(r"\bchutes\b", "tiros", texto, flags=re.I)
-            texto = re.sub(r"\bpontapé\b", "tiro", texto, flags=re.I)
-            texto = re.sub(r"\bpontapés\b", "tiros", texto, flags=re.I)
-
-        if re.search(r"\bmissed\b", original_l):
-            texto = re.sub(r"\bsaiu para fora\b", "errou o alvo", texto, flags=re.I)
-            texto = re.sub(r"\bfoi para fora\b", "errou o alvo", texto, flags=re.I)
-            texto = re.sub(r"\berrou\b(?! o alvo)", "errou o alvo", texto, flags=re.I)
-
-    correcoes = {
-        "deTODOS": "de TODOS",
-        "TODOS.Cada": "TODOS. Cada",
-        "processo.A": "processo. A",
-        "trama.Bruxas": "trama. Bruxas",
-        "completaPara": "completa. Para",
-        "bemEspero": "bem? Espero",
-        "físicaSem": "física. Sem",
-        "fisicaSem": "física. Sem",
-        "semviolência": "sem violência",
-        "semviolencia": "sem violência",
-        "lágri mas": "lágrimas",
-        "lá gri mas": "lágrimas",
-        "gr ito": "grito",
-        "TO grito": "O grito",
-        "TO gr ito": "O grito",
-        "T O grito": "O grito",
-        "memó ria": "memória",
-        "fí sica": "física",
-        "rá pido": "rápido",
-        "cére bro": "cérebro",
-        "conse guir": "conseguir",
-        "sozin has": "sozinhas",
-        "emesse": "em esse",
-        "nessequarto": "nesse quarto",
-    }
-
-    for errado, certo in correcoes.items():
-        texto = texto.replace(errado, certo)
-
-    texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", texto)
-    texto = re.sub(r"([.!?;:])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇA-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
-    texto = re.sub(r"\s{2,}", " ", texto)
-
-    return texto.strip()
-
-
-def dividir_texto_adaptativo(texto, limite):
-    texto = str(texto or "").strip()
-    if len(texto) <= limite:
-        return [texto] if texto else []
-
-    partes = []
-    atual = ""
-
-    pedacos = re.split(r"(?<=[.!?])\s+", texto)
-
-    for pedaco in pedacos:
-        pedaco = pedaco.strip()
-        if not pedaco:
-            continue
-
-        if len(atual) + len(pedaco) + 1 <= limite:
-            atual = (atual + " " + pedaco).strip()
-        else:
-            if atual:
-                partes.append(atual)
-            atual = pedaco
-
-    if atual:
-        partes.append(atual)
-
-    return partes
-
-
-def traduzir_adaptativo(texto, mecanismo, nivel=0):
-    texto = substituir_sites_por_marca(texto)
-    traducao, erro = traduzir_com_retry(texto, mecanismo)
-
-    if not erro:
-        return traducao, None
-
-    limites = [1200, 800, 450, 260]
-
-    if nivel >= len(limites):
-        return revisar_texto_final(texto), erro
-
-    partes = dividir_texto_adaptativo(texto, limites[nivel])
-
-    if len(partes) <= 1:
-        return revisar_texto_final(texto), erro
-
-    traduzidas = []
-    falhas = 0
-
-    for parte in partes:
-        t, e = traduzir_adaptativo(parte, mecanismo, nivel + 1)
-        traduzidas.append(t)
-        if e:
-            falhas += 1
-
-    return " ".join(traduzidas), (None if falhas == 0 else f"{falhas} parte(s) ficaram sem tradução")
-
-
 def criar_sep(i):
     return SEP_TEMPLATE.format(format(i, "05"))
 
 
 def separar_por_sep(texto, quantidade):
-    partes = [texto]
+    """
+    Alinhamento parecido com o plugin do Calibre:
+    ele junta trechos usando duas quebras de linha e depois separa de volta.
+    """
+    if quantidade <= 1:
+        return [revisar_texto_final(texto)] if texto and texto.strip() else []
 
-    for i in range(quantidade - 1):
-        pattern = r"\{\{\s*id\s*_\s*" + format(i, "05") + r"\s*\}\}"
-        novo = []
+    partes = [p.strip() for p in re.split(r"\n\s*\n+", texto) if p.strip()]
 
-        for parte in partes:
-            novo.extend(re.split(pattern, parte, maxsplit=1))
+    if len(partes) == quantidade:
+        return partes
 
-        partes = novo
+    if len(partes) > quantidade:
+        return partes[:quantidade - 1] + ["\n\n".join(partes[quantidade - 1:])]
 
-    partes = [
-        re.sub(r"\{\{\s*id\s*_\s*\d+\s*\}\}", "", p).strip()
-        for p in partes
-    ]
+    return partes
+def precisa_alerta_revisao(original, texto_final):
+    """Evita ponto de atenção falso. Só avisa quando sobrou inglês/site/lixo."""
+    if not texto_final or texto_sujo(texto_final):
+        return False
 
-    return [p for p in partes if p]
+    if re.search(r"oceanofpdf|z-library|1lib|z-lib|ocean\s*pdf", texto_final, flags=re.I):
+        return True
 
+    if re.search(r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}", texto_final):
+        return True
+
+    palavras_ingles = re.findall(
+        r"\b(the|and|with|your|you|she|he|they|this|that|was|were|have|from|into|would|could|should|because|before|after|when|where|what)\b",
+        texto_final,
+        flags=re.I,
+    )
+    if len(palavras_ingles) >= 2 and not parece_nome_proprio_ou_lugar(texto_final):
+        return True
+
+    if "armas" in detectar_contexto_original(original):
+        if re.search(r"\b(chute|chutes|pontapé|pontapés)\b", texto_final, flags=re.I):
+            return True
+
+    if texto_final.strip().lower() == str(original).strip().lower():
+        if re.search(r"\b(the|and|with|you|your|she|he|they|was|were|from)\b", original, flags=re.I):
+            return True
+
+    return False
 
 def traduzir_bloco_sync(item):
     bloco_id, textos, mecanismo = item
 
-    textos = [substituir_sites_por_marca(t) for t in textos]
-
-    junto = ""
-
-    for i, texto in enumerate(textos):
-        junto += texto
-
-        if i < len(textos) - 1:
-            junto += "\n\n" + criar_sep(i) + "\n\n"
-
-    traducao, erro = traduzir_adaptativo(junto, mecanismo)
+    junto, textos_limpos = preparar_contexto_para_traducao(textos)
+    traducao, erro = traduzir_com_retry(junto, mecanismo)
 
     if not erro:
-        partes = separar_por_sep(traducao, len(textos))
+        partes = separar_por_sep(traducao, len(textos_limpos))
 
-        if len(partes) == len(textos):
+        if len(partes) == len(textos_limpos):
             partes = [
                 corrigir_coerencia_contextual(original, revisar_texto_final(parte))
-                for original, parte in zip(textos, partes)
+                for original, parte in zip(textos_limpos, partes)
             ]
             return bloco_id, partes, []
 
     partes_finais = []
     erros = []
 
-    for idx, texto in enumerate(textos, start=1):
-
+    for idx, texto in enumerate(textos_limpos, start=1):
         if texto_sujo(texto):
             partes_finais.append(texto)
             continue
 
-        t, e = traduzir_adaptativo(texto, mecanismo)
+        t, e = traduzir_com_fallback(texto, mecanismo)
         texto_final = corrigir_coerencia_contextual(texto, revisar_texto_final(t))
-
         partes_finais.append(texto_final)
 
-        if e:
-            ainda_tem_ingles = bool(re.search(
-                r"\b(the|and|with|you|your|she|he|they|this|that|was|were|have|from|into|would|could|should|because|before|after|when|where|what)\b",
-                texto_final,
-                flags=re.IGNORECASE
-            ))
-
-            palavra_grudada = bool(re.search(
-                r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}",
-                texto_final
-            ))
-
-            site_sobrou = bool(re.search(
-                r"oceanofpdf|z-library|1lib|z-lib|ocean\s*pdf",
-                texto_final,
-                flags=re.IGNORECASE
-            ))
-
-            texto_igual_original = (
-                texto_final.strip().lower() ==
-                texto.strip().lower()
-            )
-
-            contexto_ruim = (
-                "armas" in detectar_contexto_original(texto)
-                and re.search(r"\b(chute|chutes|pontapé|pontapés)\b", texto_final, flags=re.I)
-            )
-
-            if (
-                ainda_tem_ingles
-                or palavra_grudada
-                or site_sobrou
-                or texto_igual_original
-                or contexto_ruim
-            ) and not parece_nome_proprio_ou_lugar(texto_final):
-
-                erros.append({
-                    "bloco": bloco_id,
-                    "trecho_num": idx,
-                    "motivo": "precisa de revisão manual",
-                    "texto": texto_curto(texto_final),
-                })
+        if e and precisa_alerta_revisao(texto, texto_final):
+            erros.append({
+                "bloco": bloco_id,
+                "trecho_num": idx,
+                "motivo": "sobrou inglês/site/lixo técnico ou tradução incoerente",
+                "texto": texto_curto(texto_final),
+            })
 
     return bloco_id, partes_finais, erros
 
@@ -1001,17 +861,52 @@ def bloco_traduzivel(tag):
 
 
 def coletar_blocos_texto(soup):
-    candidatos = soup.find_all(["p", "div", "span", "li", "blockquote", "h1", "h2", "h3", "h4"])
+    """
+    Extração no estilo do Ebook Translator do Calibre.
+    Prioriza parágrafos e blocos reais, não spans soltos.
+    Isso evita perder contexto e reduz erro tipo shot -> chute.
+    """
+    tags_prioritarias = [
+        "p", "pre", "blockquote",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "li", "td", "th", "caption",
+    ]
+    tags_blocos = set(tags_prioritarias + ["div", "section", "article", "main"])
     blocos = []
     contador = 1
 
+    def tem_bloco_filho(tag):
+        for filho in tag.find_all(tags_blocos):
+            if filho is not tag:
+                return True
+        return False
+
+    candidatos = soup.find_all(tags_prioritarias + ["div"])
+
     for tag in candidatos:
-        if not bloco_traduzivel(tag):
+        if not getattr(tag, "name", None):
             continue
 
-        texto = limpar_texto_pre_traducao(tag.get_text(" ", strip=True))
+        if tag.name in ["script", "style", "code", "head", "meta", "link", "title"]:
+            continue
 
-        if not texto or len(texto) < 2:
+        if tag.name == "div" and tem_bloco_filho(tag):
+            continue
+
+        texto_bruto = tag.get_text(" ", strip=True)
+        if not texto_bruto or len(texto_bruto.strip()) < 2:
+            continue
+
+        if texto_sujo(texto_bruto):
+            continue
+
+        if not re.search(r"[A-Za-z]", texto_bruto):
+            continue
+
+        texto = limpar_texto_pre_traducao(texto_bruto)
+        texto = substituir_sites_por_marca(texto)
+
+        if not texto or len(texto.strip()) < 2:
             continue
 
         blocos.append((contador, tag, texto))
@@ -1025,6 +920,7 @@ def coletar_blocos_texto(soup):
             continue
 
         texto = limpar_texto_pre_traducao(str(node))
+        texto = substituir_sites_por_marca(texto)
 
         if len(texto.strip()) < 2:
             continue
@@ -1033,14 +929,17 @@ def coletar_blocos_texto(soup):
         contador += 1
 
     return blocos
-
-
 def substituir_texto_no_item(item_html, texto_final):
+    """Mantém a tag e atributos, trocando só o conteúdo textual do bloco."""
     if hasattr(item_html, "clear") and hasattr(item_html, "append"):
+        attrs = dict(getattr(item_html, "attrs", {}) or {})
         item_html.clear()
+        for k, v in attrs.items():
+            item_html[k] = v
         item_html.append(NavigableString(texto_final))
     else:
         item_html.replace_with(NavigableString(texto_final))
+
 
 
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
@@ -1379,7 +1278,7 @@ async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
             f"📖 Arquivo interno: {i}/{total}\n"
             f"📊 Progresso: {porcentagem}%\n\n"
             f"{barra}\n\n"
-            f"✨ Traduzindo com fallback adaptativo... aguarde."
+            f"✨ Traduzindo... aguarde."
             f"{bloco_erros}"
         )
     except Exception:
@@ -1632,7 +1531,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
     mecanismo = usuarios[user_id]["mecanismo"]
     marca = "✅ Ativada" if usuarios[user_id]["marca"] else "❌ Desativada"
@@ -1664,7 +1563,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
     if query.data == "set_google_new":
         usuarios[user_id]["mecanismo"] = "google_new"
@@ -1708,7 +1607,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancelamentos.discard(user_id)
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
 
     documento = update.message.document
 
@@ -1847,7 +1746,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
     app.add_error_handler(erro_global)
 
-    print("✅ Alma Scriptum Translate ESTÁVEL + CONTEXTO ONLINE!")
+    print("✅ Alma Scriptum Translate CONTEXTUAL ONLINE!")
 
     app.run_polling()
 
