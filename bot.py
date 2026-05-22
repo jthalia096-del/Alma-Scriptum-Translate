@@ -141,32 +141,35 @@ def substituir_sites_por_marca(texto):
     if not texto:
         return texto
 
+    texto = str(texto)
+
     padroes = [
-        r"OceanofPDF\.com",
-        r"OceanOfPDF\.com",
-        r"OceanPDF\.com",
+        r"Ocean\s*of\s*PDF\.?\s*com",
+        r"OceanofPDF\.?\s*com",
+        r"OceanPDF\.?\s*com",
         r"oceanofpdf\.com",
         r"oceanofpdf",
         r"OceanofPDF",
-        r"Ocean Of PDF",
-        r"Ocean PDF",
-        r"z-library\.sk",
-        r"z-library",
+        r"Ocean\s*Of\s*PDF",
+        r"Ocean\s*PDF",
+        r"z[\s\-_]*library(?:\.[a-z]{2,})?",
+        r"z[\s\-_]*lib(?:\.[a-z]{2,})?",
         r"zlib",
-        r"1lib\.sk",
-        r"1lib",
-        r"z-lib\.org",
-        r"z-lib",
+        r"1lib(?:\.[a-z]{2,})?",
+        r"libgen(?:\.[a-z]{2,})?",
+        r"anna['’]?s[\s\-_]*archive",
+        r"https?://(?:www\.)?(?:oceanofpdf|z-library|z-lib|1lib|libgen|wattpad|img\.wattpad)[^\s<>'\"]*",
+        r"www\.(?:oceanofpdf|z-library|z-lib|1lib|libgen|wattpad)[^\s<>'\"]*",
     ]
 
     for p in padroes:
         texto = re.sub(p, "", texto, flags=re.IGNORECASE)
 
-    texto = re.sub(r"https?://(?:www\.)?(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
-    texto = re.sub(r"www\.(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\b[A-Za-z0-9]{60,}\b", "", texto)
+    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
     texto = re.sub(r"\s{2,}", " ", texto)
-    return texto.strip()
 
+    return texto.strip()
 
 def revisar_texto_final(texto):
     """
@@ -283,6 +286,60 @@ def preparar_contexto_para_traducao(textos):
     for t in textos:
         limpos.append(limpar_texto_pre_traducao(substituir_sites_por_marca(t)))
     return CALIBRE_SEPARATOR.join(limpos), limpos
+
+
+
+def limpar_sites_soup(soup):
+    """
+    Remove propagandas/sites como OceanofPDF, z-library e links gigantes
+    sem apagar o capítulo inteiro.
+    """
+    padrao_site = re.compile(
+        r"(ocean\s*of\s*pdf|oceanofpdf|oceanpdf|z[\s\-_]*library|z[\s\-_]*lib|1lib|libgen|anna['’]?s[\s\-_]*archive|wattpad)",
+        flags=re.I,
+    )
+
+    # Remove links que apontam para esses sites
+    for tag in list(soup.find_all(["a", "span", "p", "div", "center", "font", "small", "i", "em", "b", "strong"])):
+        txt = tag.get_text(" ", strip=True)
+        attrs = " ".join(str(v) for v in tag.attrs.values())
+
+        if padrao_site.search(attrs):
+            tag.decompose()
+            continue
+
+        # Se a tag inteira é basicamente o site, remove a tag completa
+        txt_limpo = re.sub(r"\s+", "", txt).lower()
+        if txt and len(txt) <= 80 and padrao_site.search(txt_limpo):
+            tag.decompose()
+            continue
+
+    # Limpa texto solto sem apagar o parágrafo todo
+    for node in list(soup.find_all(string=True)):
+        try:
+            parent = getattr(node, "parent", None)
+            parent_name = getattr(parent, "name", "") if parent else ""
+
+            if parent_name in ["script", "style", "head", "meta", "link", "title"]:
+                continue
+
+            original = str(node)
+            novo = substituir_sites_por_marca(original)
+
+            if novo != original:
+                if novo.strip():
+                    node.replace_with(NavigableString(novo))
+                else:
+                    node.extract()
+        except Exception:
+            pass
+
+    # Remove parágrafos/divs que ficaram vazios depois da limpeza
+    for tag in list(soup.find_all(["p", "div", "span", "center", "font", "small"])):
+        if not tag.get_text(" ", strip=True) and not tag.find(["img", "svg"]):
+            tag.decompose()
+
+    return soup
 
 
 def texto_sujo(texto):
@@ -1004,6 +1061,7 @@ def substituir_texto_no_item(item_html, texto_final):
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
     html = limpar_lixo_tecnico_bruto_html(html)
     soup = BeautifulSoup(html, "html.parser")
+    soup = limpar_sites_soup(soup)
     soup = limpar_lixo_tecnico_soup(soup)
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
@@ -1056,6 +1114,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
                 erro["capitulo"] = capitulo
                 erros.append(erro)
 
+    soup = limpar_sites_soup(soup)
     soup = limpar_lixo_tecnico_soup(soup)
     html_final = str(soup)
     return html_final, alterados, erros
@@ -1576,6 +1635,15 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     nome_base_para_titulo = nome_original or Path(entrada).name
     titulo_final = criar_nome_final(nome_base_para_titulo)
+    for _nome_arq in list(arquivos.keys()):
+        if _nome_arq.lower().endswith((".opf", ".ncx", ".xml")):
+            try:
+                _txt = arquivos[_nome_arq].decode("utf-8", errors="ignore")
+                _txt = substituir_sites_por_marca(_txt)
+                arquivos[_nome_arq] = _txt.encode("utf-8")
+            except Exception:
+                pass
+
     arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
 
     if adicionar_marca:
@@ -1605,7 +1673,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
 
     mecanismo = usuarios[user_id]["mecanismo"]
     marca = "✅ Ativada" if usuarios[user_id]["marca"] else "❌ Desativada"
@@ -1613,7 +1681,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📚 Alma Scriptum Translate\n\n"
         "✨ Modo organizado\n"
-        "⚡ Mantém estrutura do EPUB\n"
+        "⚡ Mantém estrutura do EPUB\n🧹 Limpeza de sites ativada\n"
         "📖 EPUB Inglês → Português\n\n"
         f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
         f"🖼️ Marca: {marca}\n\n"
@@ -1637,7 +1705,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
 
     if query.data == "set_google_new":
         usuarios[user_id]["mecanismo"] = "google_new"
@@ -1662,7 +1730,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(
         "📚 Alma Scriptum Translate\n\n"
         "✨ Modo organizado\n"
-        "⚡ Mantém estrutura do EPUB\n"
+        "⚡ Mantém estrutura do EPUB\n🧹 Limpeza de sites ativada\n"
         "📖 EPUB Inglês → Português\n\n"
         f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
         f"🖼️ Marca: {marca}\n\n"
@@ -1681,7 +1749,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancelamentos.discard(user_id)
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
 
     documento = update.message.document
 
