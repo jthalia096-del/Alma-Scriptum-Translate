@@ -45,8 +45,8 @@ MERGE_LENGTH = 3200
 # O plugin Ebook Translator usa separador de parágrafo por duas quebras de linha.
 # Mantemos isso para ficar mais parecido com o Calibre.
 CALIBRE_SEPARATOR = "\n\n"
-REQUEST_ATTEMPTS = 1
-REQUEST_TIMEOUT = 15
+REQUEST_ATTEMPTS = 2
+REQUEST_TIMEOUT = 25
 REQUEST_INTERVAL = 0.005
 
 CONFIGS = {
@@ -287,6 +287,7 @@ def preparar_contexto_para_traducao(textos):
 
 
 
+
 def texto_tem_site_sujo(texto):
     if not texto:
         return False
@@ -314,6 +315,9 @@ def texto_tem_site_sujo(texto):
 
 
 def limpar_sites_pesado_texto(texto):
+    """
+    Limpa só site/URL, sem apagar o parágrafo inteiro.
+    """
     if not texto:
         return texto
 
@@ -339,7 +343,7 @@ def limpar_sites_pesado_texto(texto):
     for p in padroes:
         texto = re.sub(p, "", texto, flags=re.I)
 
-    texto = re.sub(r"\b[A-Za-z0-9]{50,}\b", "", texto)
+    texto = re.sub(r"\b[A-Za-z0-9]{60,}\b", "", texto)
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
     texto = re.sub(r"\s{2,}", " ", texto)
 
@@ -348,15 +352,19 @@ def limpar_sites_pesado_texto(texto):
 
 def limpar_sites_soup(soup):
     """
-    Remove propagandas/links de onde o livro foi pego.
-    Funciona em textos soltos, tags, links e capas HTML com OceanofPDF.
+    Remove propaganda/site sem destruir capítulos.
     """
     for tag in list(soup.find_all(["a", "p", "div", "span", "font", "center", "small", "i", "em", "b", "strong"])):
         txt = tag.get_text(" ", strip=True)
         attrs = " ".join(str(v) for v in tag.attrs.values())
 
-        if texto_tem_site_sujo(txt) or texto_tem_site_sujo(attrs):
+        if texto_tem_site_sujo(attrs):
             tag.decompose()
+            continue
+
+        if texto_tem_site_sujo(txt) and len(txt) <= 120:
+            tag.decompose()
+            continue
 
     for node in list(soup.find_all(string=True)):
         parent = getattr(node, "parent", None)
@@ -366,12 +374,8 @@ def limpar_sites_soup(soup):
             continue
 
         original = str(node)
-
-        if texto_tem_site_sujo(original):
-            node.extract()
-            continue
-
         novo = limpar_sites_pesado_texto(original)
+
         if novo != original:
             if novo.strip():
                 node.replace_with(NavigableString(novo))
@@ -379,6 +383,7 @@ def limpar_sites_soup(soup):
                 node.extract()
 
     return soup
+
 
 def texto_sujo(texto):
     if not texto:
@@ -411,8 +416,6 @@ def texto_sujo(texto):
         return True
 
     return False
-
-
 
 def parece_nome_proprio_ou_lugar(texto):
     """
@@ -810,11 +813,6 @@ def criar_sep(i):
 
 
 def separar_por_sep(texto, quantidade):
-    """
-    Alinhamento estilo Calibre:
-    tenta separar por parágrafos; se o Google voltar em bloco único,
-    completa sem quebrar o EPUB.
-    """
     if quantidade <= 1:
         return [revisar_texto_final(texto)] if texto and texto.strip() else []
 
@@ -826,12 +824,7 @@ def separar_por_sep(texto, quantidade):
     if len(partes) > quantidade:
         return partes[:quantidade - 1] + ["\n\n".join(partes[quantidade - 1:])]
 
-    if len(partes) < quantidade:
-        while len(partes) < quantidade:
-            partes.append("")
-        return partes
-
-    return partes
+    return []
 
 def precisa_alerta_revisao(original, texto_final):
     """Evita ponto de atenção falso. Só avisa quando sobrou inglês/site/lixo."""
@@ -941,7 +934,7 @@ def traduzir_bloco_sync(item):
 
     for idx, texto in enumerate(textos_limpos, start=1):
         if texto_sujo(texto):
-            partes_finais.append(texto)
+            partes_finais.append("")
             continue
 
         t, e = traduzir_adaptativo(texto, mecanismo)
@@ -1841,7 +1834,7 @@ def adicionar_pagina_marca_zip(arquivos):
     return arquivos
 
 
-async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True, nome_original=None):
+async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=False, nome_original=None):
     erros = []
     traduzidos = 0
 
@@ -1943,7 +1936,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
 
     mecanismo = usuarios[user_id]["mecanismo"]
     marca = "✅ Ativada" if usuarios[user_id]["marca"] else "❌ Desativada"
@@ -1954,7 +1947,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚡ Mantém estrutura do EPUB\n"
         "📖 EPUB Inglês → Português\n\n"
         f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
-        f"🖼️ Marca: {marca}\n\n"
+        f"🖼️ Marca: ❌ Desativada para preservar a capa original\n\n"
         "📤 Escolha o mecanismo e envie um EPUB.",
         reply_markup=teclado_principal(),
     )
@@ -1975,7 +1968,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
 
     if query.data == "set_google_new":
         usuarios[user_id]["mecanismo"] = "google_new"
@@ -1987,7 +1980,9 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         usuarios[user_id]["mecanismo"] = "google_old"
 
     elif query.data == "marca":
-        usuarios[user_id]["marca"] = not usuarios[user_id]["marca"]
+        usuarios[user_id]["marca"] = False
+        await query.message.reply_text("🖼️ Marca desativada para preservar a capa original do livro.")
+        return
 
     elif query.data == "cancelar":
         cancelamentos.add(user_id)
@@ -2003,7 +1998,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚡ Mantém estrutura do EPUB\n"
         "📖 EPUB Inglês → Português\n\n"
         f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
-        f"🖼️ Marca: {marca}\n\n"
+        f"🖼️ Marca: ❌ Desativada para preservar a capa original\n\n"
         "📤 Agora envie o EPUB.",
         reply_markup=teclado_principal(),
     )
@@ -2019,7 +2014,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancelamentos.discard(user_id)
 
     if user_id not in usuarios:
-        usuarios[user_id] = {"marca": True, "mecanismo": "google_new"}
+        usuarios[user_id] = {"marca": False, "mecanismo": "google_new"}
 
     documento = update.message.document
 
@@ -2056,7 +2051,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mecanismo=mecanismo,
             user_id=user_id,
             mensagem=mensagem,
-            adicionar_marca=usuarios[user_id]["marca"],
+            adicionar_marca=False,
             nome_original=documento.file_name,
         )
 
