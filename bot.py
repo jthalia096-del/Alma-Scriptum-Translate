@@ -41,10 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 3200
-# O plugin Ebook Translator usa separador de parágrafo por duas quebras de linha.
-# Mantemos isso para ficar mais parecido com o Calibre.
-CALIBRE_SEPARATOR = "\n\n"
+MERGE_LENGTH = 2400
 REQUEST_ATTEMPTS = 2
 REQUEST_TIMEOUT = 25
 REQUEST_INTERVAL = 0.005
@@ -141,248 +138,128 @@ def substituir_sites_por_marca(texto):
     if not texto:
         return texto
 
-    padroes = [
-        r"OceanofPDF\.com",
-        r"OceanOfPDF\.com",
-        r"OceanPDF\.com",
-        r"oceanofpdf\.com",
-        r"oceanofpdf",
-        r"OceanofPDF",
-        r"Ocean Of PDF",
-        r"Ocean PDF",
-        r"z-library\.sk",
-        r"z-library",
-        r"zlib",
-        r"1lib\.sk",
-        r"1lib",
-        r"z-lib\.org",
-        r"z-lib",
-    ]
-
-    for p in padroes:
-        texto = re.sub(p, "", texto, flags=re.IGNORECASE)
-
-    texto = re.sub(r"https?://(?:www\.)?(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
-    texto = re.sub(r"www\.(?:oceanofpdf|z-library|z-lib|1lib)[^\s<>'\"]*", "", texto, flags=re.IGNORECASE)
-    texto = re.sub(r"\s{2,}", " ", texto)
-    return texto.strip()
-
-
-def revisar_texto_final(texto):
-    """
-    Pós-processamento mínimo, estilo Calibre.
-    Aqui NÃO fazemos correções agressivas de tradução, porque isso pode piorar
-    o sentido. Apenas limpamos entidades, sites e espaçamento quebrado.
-    """
-    if not texto:
-        return texto
-
-    texto = html_lib.unescape(str(texto))
-    texto = substituir_sites_por_marca(texto)
-    texto = limpar_sites_pesado_texto(texto)
-
-    texto = texto.replace("&quot;", '"')
-    texto = texto.replace("&#39;", "'")
-    texto = texto.replace("&amp;", "&")
-
-    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
-    texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"([“\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"([A-Za-zÀ-ÿ])([”\"])", r"\1\2", texto)
-    texto = re.sub(r"\s+", " ", texto)
-
-    return texto.strip()
-
-def detectar_contexto_original(texto):
-    """Detecta contexto no texto original para corrigir ambiguidades."""
-    t = str(texto or "").lower()
-
-    armas = [
-        "gun", "guns", "shot", "shots", "shoot", "shooting", "shooter",
-        "fired", "firearm", "rifle", "pistol", "revolver", "bullet",
-        "bullets", "trigger", "barrel", "ammo", "weapon", "weapons",
-        "aim", "aimed", "target", "missed", "hit", "muzzle", "holster"
-    ]
-
-    futebol = [
-        "soccer", "football", "goal", "ball", "kick", "kicked",
-        "field", "goalkeeper", "match", "team", "penalty"
-    ]
-
-    contexto = set()
-
-    if sum(1 for p in armas if re.search(rf"\b{re.escape(p)}\b", t)) >= 1:
-        contexto.add("armas")
-
-    if sum(1 for p in futebol if re.search(rf"\b{re.escape(p)}\b", t)) >= 2:
-        contexto.add("futebol")
-
-    return contexto
-
-
-def corrigir_coerencia_contextual(original, traduzido):
-    """Correção leve pós-tradução baseada no original."""
-    if not traduzido:
-        return traduzido
-
-    texto = str(traduzido)
-    original_l = str(original or "").lower()
-    contexto = detectar_contexto_original(original)
-
-    if "armas" in contexto and "futebol" not in contexto:
-        if re.search(r"\bshot(s)?\b", original_l) or re.search(r"\bfired\b", original_l):
-            texto = re.sub(r"\bchute\b", "tiro", texto, flags=re.I)
-            texto = re.sub(r"\bchutes\b", "tiros", texto, flags=re.I)
-            texto = re.sub(r"\bpontapé\b", "tiro", texto, flags=re.I)
-            texto = re.sub(r"\bpontapés\b", "tiros", texto, flags=re.I)
-
-        if re.search(r"\bmissed\b", original_l):
-            texto = re.sub(r"\bsaiu para fora\b", "errou o alvo", texto, flags=re.I)
-            texto = re.sub(r"\berrou\b(?! o alvo)", "errou o alvo", texto, flags=re.I)
-
-    correcoes = {
-        "deTODOS": "de TODOS",
-        "TODOS.Cada": "TODOS. Cada",
-        "processo.A": "processo. A",
-        "trama.Bruxas": "trama. Bruxas",
-        "completaPara": "completa. Para",
-        "bemEspero": "bem? Espero",
-        "físicaSem": "física. Sem",
-        "fisicaSem": "física. Sem",
-        "semviolência": "sem violência",
-        "semviolencia": "sem violência",
-        "lágri mas": "lágrimas",
-        "lá gri mas": "lágrimas",
-        "gr ito": "grito",
-        "TO grito": "O grito",
-        "TO gr ito": "O grito",
-        "T O grito": "O grito",
-        "memó ria": "memória",
-        "fí sica": "física",
-        "rá pido": "rápido",
-        "cére bro": "cérebro",
-        "conse guir": "conseguir",
-        "sozin has": "sozinhas",
-        "emesse": "em esse",
-        "nessequarto": "nesse quarto",
-    }
-
-    for errado, certo in correcoes.items():
-        texto = texto.replace(errado, certo)
-
-    texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", texto)
-    texto = re.sub(r"([.!?;:])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇA-Za-zÀ-ÿ])", r"\1 \2", texto)
-    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
-    texto = re.sub(r"\s{2,}", " ", texto)
-
-    return texto.strip()
-
-
-def preparar_contexto_para_traducao(textos):
-    """Junta parágrafos com separador do estilo Calibre."""
-    limpos = []
-    for t in textos:
-        limpos.append(limpar_texto_pre_traducao(substituir_sites_por_marca(t)))
-    return CALIBRE_SEPARATOR.join(limpos), limpos
-
-
-
-
-def texto_tem_site_sujo(texto):
-    if not texto:
-        return False
-
-    t = str(texto).lower()
-    compact = re.sub(r"[\s._\-:/\\]+", "", t)
-
-    padroes = [
-        "oceanofpdf", "oceanpdf", "oceanofbooks",
-        "zlibrary", "zlib", "z-lib", "1lib",
-        "annasarchive", "libgen", "bookfrom",
-        "wattpad.com", "img.wattpad.com",
-    ]
-
-    if any(p.replace("-", "") in compact for p in padroes):
-        return True
-
-    if re.search(r"https?://", t, flags=re.I):
-        return True
-
-    if re.search(r"www\.", t, flags=re.I):
-        return True
-
-    return False
-
-
-def limpar_sites_pesado_texto(texto):
-    """
-    Limpa só site/URL, sem apagar o parágrafo inteiro.
-    """
-    if not texto:
-        return texto
-
     texto = str(texto)
 
     padroes = [
         r"Ocean\s*of\s*PDF\.?\s*com",
         r"OceanofPDF\.?\s*com",
         r"OceanPDF\.?\s*com",
-        r"Ocean\s*PDF",
+        r"oceanofpdf\.com",
+        r"oceanofpdf",
         r"OceanofPDF",
+        r"Ocean\s*Of\s*PDF",
+        r"Ocean\s*PDF",
         r"z[\s\-_]*library(?:\.[a-z]{2,})?",
         r"z[\s\-_]*lib(?:\.[a-z]{2,})?",
+        r"zlib",
         r"1lib(?:\.[a-z]{2,})?",
         r"libgen(?:\.[a-z]{2,})?",
         r"anna['’]?s[\s\-_]*archive",
-        r"wattpad\.com/\S+",
-        r"img\.wattpad\.com/\S+",
-        r"https?://\S+",
-        r"www\.\S+",
+        r"https?://(?:www\.)?(?:oceanofpdf|z-library|z-lib|1lib|libgen|wattpad|img\.wattpad)[^\s<>'\"]*",
+        r"www\.(?:oceanofpdf|z-library|z-lib|1lib|libgen|wattpad)[^\s<>'\"]*",
     ]
 
     for p in padroes:
-        texto = re.sub(p, "", texto, flags=re.I)
+        texto = re.sub(p, "", texto, flags=re.IGNORECASE)
 
     texto = re.sub(r"\b[A-Za-z0-9]{60,}\b", "", texto)
     texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
     texto = re.sub(r"\s{2,}", " ", texto)
-
     return texto.strip()
 
+def revisar_texto_final(texto):
+    if not texto:
+        return texto
 
-def limpar_sites_soup(soup):
-    """
-    Remove propaganda/site sem destruir capítulos.
-    """
-    for tag in list(soup.find_all(["a", "p", "div", "span", "font", "center", "small", "i", "em", "b", "strong"])):
-        txt = tag.get_text(" ", strip=True)
-        attrs = " ".join(str(v) for v in tag.attrs.values())
+    texto = html_lib.unescape(texto)
+    texto = substituir_sites_por_marca(texto)
 
-        if texto_tem_site_sujo(attrs):
-            tag.decompose()
-            continue
+    texto = texto.replace("&quot;", '"')
+    texto = texto.replace("&#39;", "'")
+    texto = texto.replace("&amp;", "&")
 
-        if texto_tem_site_sujo(txt) and len(txt) <= 120:
-            tag.decompose()
-            continue
+    correcoes = {
+        "deTODOS": "de TODOS",
+        "de TODOS.Cada": "de TODOS. Cada",
+        "TODOS.Cada": "TODOS. Cada",
+        "paraa": "para a",
+        "paraaNo": "para a No",
+        "paraaNa": "para a Na",
+        "passaEm": "passa em",
+        "se passaEm": "se passa em",
+        "completaincluindo": "completa incluindo",
+        "incluindoo": "incluindo o",
+        "incluindoa": "incluindo a",
+        "deda": "de da",
+        "dea": "de a",
+        "doa": "do a",
+        "daA": "da A",
+        "doO": "do O",
+        "noA": "no A",
+        "naA": "na A",
+        "emA": "em A",
+        "deA": "de A",
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
+        "nesseambiente": "nesse ambiente",
+        "quememória": "que memória",
+        "quememoria": "que memória",
+        "caralhoquememória": "caralho, que memória",
+        "caralhoquememoria": "caralho, que memória",
+        "monitorese": "monitores e",
+        "perguntase": "pergunta se",
+        "resolvê-loAgora": "resolvê-lo. Agora",
+        "resolveloAgora": "resolvê-lo. Agora",
+        "seunúmero": "seu número",
+        "seunumero": "seu número",
+        "minhatristeza": "minha tristeza",
+        "ignorá-lasMAS": "ignorá-las. MAS",
+        "ignora-lasMAS": "ignorá-las. MAS",
+        "bemEspero": "bem? Espero",
+        "bem?Espero": "bem? Espero",
+        "físicasem": "física. Sem",
+        "fisicasem": "física. Sem",
+        "físicaSem": "física. Sem",
+        "semviolência": "sem violência",
+        "semviolencia": "sem violência",
+        "ok,tudo": "Ok, tudo",
+        "Ok,tudo": "Ok, tudo",
+        "eununcadeixarei": "eu nunca deixarei",
+    }
 
-    for node in list(soup.find_all(string=True)):
-        parent = getattr(node, "parent", None)
-        parent_name = getattr(parent, "name", "") if parent else ""
+    for errado, certo in correcoes.items():
+        texto = texto.replace(errado, certo)
 
-        if parent_name in ["script", "style"]:
-            continue
+    texto = re.sub(
+        r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})",
+        r"\1 \2",
+        texto
+    )
 
-        original = str(node)
-        novo = limpar_sites_pesado_texto(original)
+    palavras_comuns = [
+        "que", "quando", "porque", "mas", "então", "agora", "aqui", "ali",
+        "com", "sem", "para", "pela", "pelo", "nesse", "nessa", "naquele",
+        "naquela", "minha", "meu", "sua", "seu", "todos", "todas", "memória",
+        "memoria", "lembrança", "quarto", "casa", "telefone", "mensagem",
+        "pergunta", "resposta", "espero", "preciso", "violência", "violencia",
+        "física", "fisica", "incluindo", "experiência", "experiencia",
+    ]
 
-        if novo != original:
-            if novo.strip():
-                node.replace_with(NavigableString(novo))
-            else:
-                node.extract()
+    for palavra in palavras_comuns:
+        texto = re.sub(
+            rf"([a-záàâãéêíóôõúç]{{3,}})({palavra})\b",
+            r"\1 \2",
+            texto,
+            flags=re.IGNORECASE,
+        )
 
-    return soup
+    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
+    texto = re.sub(r"([,.!?;:])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"([a-záàâãéêíóôõúç])([“\"])", r"\1 \2", texto)
+    texto = re.sub(r"([”\"])([A-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"\s+", " ", texto)
+
+    return texto.strip()
 
 
 def texto_sujo(texto):
@@ -416,6 +293,8 @@ def texto_sujo(texto):
         return True
 
     return False
+
+
 
 def parece_nome_proprio_ou_lugar(texto):
     """
@@ -662,7 +541,6 @@ def ordem_fallback(mecanismo_principal):
 def traduzir_com_retry(texto, mecanismo):
     ultimo_erro = None
     texto = substituir_sites_por_marca(texto)
-    texto = limpar_sites_pesado_texto(texto)
 
     for mecanismo_teste in ordem_fallback(mecanismo):
         for tentativa in range(REQUEST_ATTEMPTS):
@@ -689,7 +567,7 @@ def traduzir_com_fallback(texto, mecanismo):
     if not erro:
         return traducao, None
 
-    partes = [texto]
+    partes = re.split(r"(?<=[.!?])\s+", texto)
     traduzidas = []
     falhas = 0
 
@@ -712,81 +590,127 @@ def traduzir_com_fallback(texto, mecanismo):
 
 
 
-def dividir_texto_adaptativo(texto, tamanho_max):
-    """
-    Divide texto quando todos os mecanismos falham.
-    Tenta manter frases/parágrafos inteiros, igual lógica adaptativa do Calibre.
-    """
-    texto = str(texto or "").strip()
+def detectar_contexto_original(texto):
+    t = str(texto or "").lower()
 
-    if len(texto) <= tamanho_max:
+    armas = [
+        "gun", "guns", "shot", "shots", "shoot", "shooting", "shooter",
+        "fired", "firearm", "rifle", "pistol", "revolver", "bullet",
+        "bullets", "trigger", "barrel", "ammo", "ammunition", "weapon",
+        "weapons", "aim", "aimed", "target", "missed", "hit", "muzzle",
+        "holster", "silencer", "reload", "blood", "ducked", "cover"
+    ]
+
+    futebol = [
+        "soccer", "football", "goal", "ball", "kick", "kicked", "kicking",
+        "field", "goalkeeper", "match", "team", "penalty"
+    ]
+
+    contexto = set()
+
+    if sum(1 for p in armas if re.search(rf"\b{re.escape(p)}\b", t)) >= 1:
+        contexto.add("armas")
+
+    if sum(1 for p in futebol if re.search(rf"\b{re.escape(p)}\b", t)) >= 2:
+        contexto.add("futebol")
+
+    return contexto
+
+
+def corrigir_coerencia_contextual(original, traduzido):
+    if not traduzido:
+        return traduzido
+
+    texto = str(traduzido)
+    original_l = str(original or "").lower()
+    contexto = detectar_contexto_original(original)
+
+    if "armas" in contexto and "futebol" not in contexto:
+        if re.search(r"\bshot(s)?\b", original_l) or re.search(r"\bfired\b", original_l):
+            texto = re.sub(r"\bchute\b", "tiro", texto, flags=re.I)
+            texto = re.sub(r"\bchutes\b", "tiros", texto, flags=re.I)
+            texto = re.sub(r"\bpontapé\b", "tiro", texto, flags=re.I)
+            texto = re.sub(r"\bpontapés\b", "tiros", texto, flags=re.I)
+
+        if re.search(r"\bmissed\b", original_l):
+            texto = re.sub(r"\bsaiu para fora\b", "errou o alvo", texto, flags=re.I)
+            texto = re.sub(r"\bfoi para fora\b", "errou o alvo", texto, flags=re.I)
+            texto = re.sub(r"\berrou\b(?! o alvo)", "errou o alvo", texto, flags=re.I)
+
+    correcoes = {
+        "deTODOS": "de TODOS",
+        "TODOS.Cada": "TODOS. Cada",
+        "processo.A": "processo. A",
+        "trama.Bruxas": "trama. Bruxas",
+        "completaPara": "completa. Para",
+        "bemEspero": "bem? Espero",
+        "físicaSem": "física. Sem",
+        "fisicaSem": "física. Sem",
+        "semviolência": "sem violência",
+        "semviolencia": "sem violência",
+        "lágri mas": "lágrimas",
+        "lá gri mas": "lágrimas",
+        "gr ito": "grito",
+        "TO grito": "O grito",
+        "TO gr ito": "O grito",
+        "T O grito": "O grito",
+        "memó ria": "memória",
+        "fí sica": "física",
+        "rá pido": "rápido",
+        "cére bro": "cérebro",
+        "conse guir": "conseguir",
+        "sozin has": "sozinhas",
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
+    }
+
+    for errado, certo in correcoes.items():
+        texto = texto.replace(errado, certo)
+
+    texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", texto)
+    texto = re.sub(r"([.!?;:])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇA-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
+    texto = re.sub(r"\s{2,}", " ", texto)
+
+    return texto.strip()
+
+
+def dividir_texto_adaptativo(texto, limite):
+    texto = str(texto or "").strip()
+    if len(texto) <= limite:
         return [texto] if texto else []
 
-    paragrafos = [p.strip() for p in re.split(r"\n\s*\n+", texto) if p.strip()]
     partes = []
     atual = ""
 
-    base = paragrafos if len(paragrafos) > 1 else re.split(r"(?<=[.!?])\s+", texto)
+    pedacos = re.split(r"(?<=[.!?])\s+", texto)
 
-    for pedaco in base:
+    for pedaco in pedacos:
         pedaco = pedaco.strip()
         if not pedaco:
             continue
 
-        if len(pedaco) > tamanho_max:
-            if atual:
-                partes.append(atual.strip())
-                atual = ""
-
-            frases = re.split(r"(?<=[.!?])\s+", pedaco)
-            sub = ""
-            for frase in frases:
-                frase = frase.strip()
-                if not frase:
-                    continue
-
-                if len(sub) + len(frase) + 1 <= tamanho_max:
-                    sub = (sub + " " + frase).strip()
-                else:
-                    if sub:
-                        partes.append(sub.strip())
-                    sub = frase
-
-            if sub:
-                partes.append(sub.strip())
-
-            continue
-
-        if len(atual) + len(pedaco) + 2 <= tamanho_max:
-            atual = (atual + "\n\n" + pedaco).strip() if atual else pedaco
+        if len(atual) + len(pedaco) + 1 <= limite:
+            atual = (atual + " " + pedaco).strip()
         else:
             if atual:
-                partes.append(atual.strip())
+                partes.append(atual)
             atual = pedaco
 
     if atual:
-        partes.append(atual.strip())
+        partes.append(atual)
 
     return partes
 
 
 def traduzir_adaptativo(texto, mecanismo, nivel=0):
-    """
-    1. tenta mecanismo principal;
-    2. tenta fallback automático;
-    3. se falhar, reduz bloco;
-    4. traduz partes menores;
-    5. depois volta normal no próximo bloco.
-    """
     texto = substituir_sites_por_marca(texto)
-    texto = limpar_sites_pesado_texto(texto)
-
     traducao, erro = traduzir_com_retry(texto, mecanismo)
 
     if not erro:
         return traducao, None
 
-    limites = [1400, 900, 550, 320]
+    limites = [1200, 800, 450, 260]
 
     if nivel >= len(limites):
         return revisar_texto_final(texto), erro
@@ -797,169 +721,124 @@ def traduzir_adaptativo(texto, mecanismo, nivel=0):
         return revisar_texto_final(texto), erro
 
     traduzidas = []
-    falhas = []
+    falhas = 0
 
     for parte in partes:
         t, e = traduzir_adaptativo(parte, mecanismo, nivel + 1)
         traduzidas.append(t)
-
         if e:
-            falhas.append(e)
+            falhas += 1
 
-    return "\n\n".join(traduzidas), (None if not falhas else f"{len(falhas)} parte(s) com fallback/adaptação")
+    return " ".join(traduzidas), (None if falhas == 0 else f"{falhas} parte(s) ficaram sem tradução")
+
 
 def criar_sep(i):
     return SEP_TEMPLATE.format(format(i, "05"))
 
 
 def separar_por_sep(texto, quantidade):
-    if quantidade <= 1:
-        return [revisar_texto_final(texto)] if texto and texto.strip() else []
+    partes = [texto]
 
-    partes = [p.strip() for p in re.split(r"\n\s*\n+", str(texto)) if p.strip()]
+    for i in range(quantidade - 1):
+        pattern = r"\{\{\s*id\s*_\s*" + format(i, "05") + r"\s*\}\}"
+        novo = []
 
-    if len(partes) == quantidade:
-        return partes
+        for parte in partes:
+            novo.extend(re.split(pattern, parte, maxsplit=1))
 
-    if len(partes) > quantidade:
-        return partes[:quantidade - 1] + ["\n\n".join(partes[quantidade - 1:])]
+        partes = novo
 
-    return []
-
-def precisa_alerta_revisao(original, texto_final):
-    """Evita ponto de atenção falso. Só avisa quando sobrou inglês/site/lixo."""
-    if not texto_final or texto_sujo(texto_final):
-        return False
-
-    if re.search(r"oceanofpdf|z-library|1lib|z-lib|ocean\s*pdf", texto_final, flags=re.I):
-        return True
-
-    if re.search(r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}", texto_final):
-        return True
-
-    palavras_ingles = re.findall(
-        r"\b(the|and|with|your|you|she|he|they|this|that|was|were|have|from|into|would|could|should|because|before|after|when|where|what)\b",
-        texto_final,
-        flags=re.I,
-    )
-    if len(palavras_ingles) >= 2 and not parece_nome_proprio_ou_lugar(texto_final):
-        return True
-
-    if "armas" in detectar_contexto_original(original):
-        if re.search(r"\b(chute|chutes|pontapé|pontapés)\b", texto_final, flags=re.I):
-            return True
-
-    if texto_final.strip().lower() == str(original).strip().lower():
-        if re.search(r"\b(the|and|with|you|your|she|he|they|was|were|from)\b", original, flags=re.I):
-            return True
-
-    return False
-
-
-def detectar_trechos_nao_traduzidos(original, texto_final):
-    """
-    Detecta frases/palavras que provavelmente ficaram em inglês depois da tradução.
-    Retorna uma lista curta para colocar no log final.
-    """
-    if not texto_final:
-        return []
-
-    texto = str(texto_final)
-
-    padroes = [
-        r"\b(the|and|with|your|you|she|he|they|this|that|was|were|have|from|into|would|could|should|because|before|after|when|where|what|why|how|then|there|here)\b",
-        r"\b(I|I'm|I've|I'll|I'd|don't|didn't|can't|couldn't|shouldn't|won't|wasn't|weren't|isn't|aren't)\b",
+    partes = [
+        re.sub(r"\{\{\s*id\s*_\s*\d+\s*\}\}", "", p).strip()
+        for p in partes
     ]
 
-    encontrados = []
-
-    for p in padroes:
-        for m in re.finditer(p, texto, flags=re.I):
-            trecho = m.group(0).strip()
-            if trecho and trecho.lower() not in [e.lower() for e in encontrados]:
-                encontrados.append(trecho)
-
-    # Pega mini-frases ainda em inglês, mas evita nomes próprios curtos.
-    possiveis = re.findall(
-        r"\b(?:[A-Z]?[a-z]+(?:'t|'m|'re|'ve|'ll|'d)?\s+){1,5}(?:the|and|with|your|you|she|he|they|was|were|from|because|before|after)\b(?:\s+[A-Za-z']+){0,4}",
-        texto,
-        flags=re.I,
-    )
-
-    for trecho in possiveis:
-        trecho = re.sub(r"\s+", " ", trecho).strip()
-        if len(trecho) > 4 and trecho.lower() not in [e.lower() for e in encontrados]:
-            if not parece_nome_proprio_ou_lugar(trecho):
-                encontrados.append(trecho)
-
-    return encontrados[:8]
-
-
-def criar_erro_revisao(bloco_id, idx, original, texto_final, motivo_extra=None):
-    nao_traduzidos = detectar_trechos_nao_traduzidos(original, texto_final)
-
-    motivo = motivo_extra or "precisa de revisão"
-    if nao_traduzidos:
-        motivo = "trecho/palavra possivelmente não traduzido"
-
-    return {
-        "bloco": bloco_id,
-        "trecho_num": idx,
-        "motivo": motivo,
-        "original": texto_curto(original, 700),
-        "traducao": texto_curto(texto_final, 700),
-        "nao_traduzidos": ", ".join(nao_traduzidos) if nao_traduzidos else "",
-        "texto": texto_curto(texto_final, 420),
-    }
+    return [p for p in partes if p]
 
 
 def traduzir_bloco_sync(item):
     bloco_id, textos, mecanismo = item
 
-    junto, textos_limpos = preparar_contexto_para_traducao(textos)
+    textos = [substituir_sites_por_marca(t) for t in textos]
+
+    junto = ""
+
+    for i, texto in enumerate(textos):
+        junto += texto
+
+        if i < len(textos) - 1:
+            junto += "\n\n" + criar_sep(i) + "\n\n"
+
     traducao, erro = traduzir_adaptativo(junto, mecanismo)
 
     if not erro:
-        partes = separar_por_sep(traducao, len(textos_limpos))
+        partes = separar_por_sep(traducao, len(textos))
 
-        if len(partes) == len(textos_limpos):
+        if len(partes) == len(textos):
             partes = [
                 corrigir_coerencia_contextual(original, revisar_texto_final(parte))
-                for original, parte in zip(textos_limpos, partes)
+                for original, parte in zip(textos, partes)
             ]
             return bloco_id, partes, []
 
     partes_finais = []
     erros = []
 
-    for idx, texto in enumerate(textos_limpos, start=1):
+    for idx, texto in enumerate(textos, start=1):
+
         if texto_sujo(texto):
-            partes_finais.append("")
+            partes_finais.append(texto)
             continue
 
         t, e = traduzir_adaptativo(texto, mecanismo)
         texto_final = corrigir_coerencia_contextual(texto, revisar_texto_final(t))
+
         partes_finais.append(texto_final)
 
-        if e and precisa_alerta_revisao(texto, texto_final):
-            if "criar_erro_revisao" in globals():
-                erros.append(criar_erro_revisao(
-                    bloco_id,
-                    idx,
-                    texto,
-                    texto_final,
-                    "sobrou inglês/site/lixo técnico ou tradução incoerente"
-                ))
-            else:
+        if e:
+            ainda_tem_ingles = bool(re.search(
+                r"\b(the|and|with|you|your|she|he|they|this|that|was|were|have|from|into|would|could|should|because|before|after|when|where|what)\b",
+                texto_final,
+                flags=re.IGNORECASE
+            ))
+
+            palavra_grudada = bool(re.search(
+                r"[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}",
+                texto_final
+            ))
+
+            site_sobrou = bool(re.search(
+                r"oceanofpdf|z-library|1lib|z-lib|ocean\s*pdf",
+                texto_final,
+                flags=re.IGNORECASE
+            ))
+
+            texto_igual_original = (
+                texto_final.strip().lower() ==
+                texto.strip().lower()
+            )
+
+            contexto_ruim = (
+                "armas" in detectar_contexto_original(texto)
+                and re.search(r"\b(chute|chutes|pontapé|pontapés)\b", texto_final, flags=re.I)
+            )
+
+            if (
+                ainda_tem_ingles
+                or palavra_grudada
+                or site_sobrou
+                or texto_igual_original
+                or contexto_ruim
+            ) and not parece_nome_proprio_ou_lugar(texto_final):
+
                 erros.append({
                     "bloco": bloco_id,
                     "trecho_num": idx,
-                    "motivo": "sobrou inglês/site/lixo técnico ou tradução incoerente",
+                    "motivo": "precisa de revisão manual",
                     "texto": texto_curto(texto_final),
                 })
 
     return bloco_id, partes_finais, erros
-
 
 
 
@@ -1025,121 +904,6 @@ def contexto_capitulo(soup, arquivo_nome=""):
 
     return "Capítulo não identificado"
 
-
-
-def eh_quebra_de_contexto(texto):
-    if not texto:
-        return True
-
-    t = re.sub(r"\s+", " ", str(texto)).strip()
-    low = t.lower()
-
-    if len(t) <= 2:
-        return True
-
-    padroes = [
-        r"^chapter\s+\d+",
-        r"^cap[ií]tulo\s+\d+",
-        r"^prologue$",
-        r"^pr[oó]logo$",
-        r"^epilogue$",
-        r"^ep[ií]logo$",
-        r"^\*{3,}$",
-        r"^[-–—]{3,}$",
-        r"^#\s*\d+",
-    ]
-
-    if any(re.search(p, low, flags=re.I) for p in padroes):
-        return True
-
-    palavras = t.split()
-    if len(palavras) <= 4 and (t.isupper() or parece_nome_proprio_ou_lugar(t)):
-        return True
-
-    return False
-
-
-def tipo_linha_contextual(texto):
-    t = str(texto or "").strip()
-
-    if eh_quebra_de_contexto(t):
-        return "quebra"
-
-    if re.match(r'^[“"\'—-]', t):
-        return "dialogo"
-
-    if re.search(r'[”"\']\s*(disse|perguntou|respondeu|murmurou|gritou|sussurrou|falou)\b', t, flags=re.I):
-        return "dialogo"
-
-    if len(t) <= 120 and not t.endswith(".") and not t.endswith("!") and not t.endswith("?"):
-        return "curto"
-
-    return "narracao"
-
-
-def pode_juntar_contexto(bloco_atual, item, tamanho_atual, limite):
-    _, _, texto = item
-    texto = limpar_texto_pre_traducao(texto)
-
-    if not bloco_atual:
-        return True
-
-    if eh_quebra_de_contexto(texto):
-        return False
-
-    if tamanho_atual + len(texto) + 2 > limite:
-        return False
-
-    ultimo_texto = bloco_atual[-1][2]
-    tipo_atual = tipo_linha_contextual(ultimo_texto)
-    tipo_novo = tipo_linha_contextual(texto)
-
-    if tipo_atual == "quebra" or tipo_novo == "quebra":
-        return False
-
-    if tipo_atual == "dialogo" and tipo_novo in ["dialogo", "narracao", "curto"]:
-        return True
-
-    if tipo_atual == "narracao" and tipo_novo in ["narracao", "dialogo", "curto"]:
-        return True
-
-    if tipo_novo == "curto":
-        return True
-
-    return True
-
-
-def montar_blocos_contextuais(nos, limite=None):
-    limite = limite or MERGE_LENGTH
-    blocos = []
-    bloco = []
-    tamanho = 0
-
-    for item in nos:
-        _, _, texto = item
-        texto_limpo = limpar_texto_pre_traducao(texto)
-        extra = len(texto_limpo) + 2
-
-        if eh_quebra_de_contexto(texto_limpo):
-            if bloco:
-                blocos.append(bloco)
-                bloco = []
-                tamanho = 0
-            blocos.append([item])
-            continue
-
-        if bloco and not pode_juntar_contexto(bloco, item, tamanho, limite):
-            blocos.append(bloco)
-            bloco = []
-            tamanho = 0
-
-        bloco.append(item)
-        tamanho += extra
-
-    if bloco:
-        blocos.append(bloco)
-
-    return blocos
 
 def montar_blocos(nos):
     blocos = []
@@ -1237,53 +1001,17 @@ def bloco_traduzivel(tag):
 
 
 def coletar_blocos_texto(soup):
-    """
-    Extração no estilo do Ebook Translator do Calibre.
-    Prioriza parágrafos e blocos reais, não spans soltos.
-    Isso evita perder contexto e reduz erro tipo shot -> chute.
-    """
-    tags_prioritarias = [
-        "p", "pre", "blockquote",
-        "h1", "h2", "h3", "h4", "h5", "h6",
-        "li", "td", "th", "caption",
-    ]
-    tags_blocos = set(tags_prioritarias + ["div", "section", "article", "main"])
+    candidatos = soup.find_all(["p", "div", "span", "li", "blockquote", "h1", "h2", "h3", "h4"])
     blocos = []
     contador = 1
 
-    def tem_bloco_filho(tag):
-        for filho in tag.find_all(tags_blocos):
-            if filho is not tag:
-                return True
-        return False
-
-    candidatos = soup.find_all(tags_prioritarias + ["div"])
-
     for tag in candidatos:
-        if not getattr(tag, "name", None):
+        if not bloco_traduzivel(tag):
             continue
 
-        if tag.name in ["script", "style", "code", "head", "meta", "link", "title"]:
-            continue
+        texto = limpar_texto_pre_traducao(tag.get_text(" ", strip=True))
 
-        if tag.name == "div" and tem_bloco_filho(tag):
-            continue
-
-        texto_bruto = tag.get_text(" ", strip=True)
-        if not texto_bruto or len(texto_bruto.strip()) < 2:
-            continue
-
-        if texto_sujo(texto_bruto):
-            continue
-
-        if not re.search(r"[A-Za-z]", texto_bruto):
-            continue
-
-        texto = limpar_texto_pre_traducao(texto_bruto)
-        texto = substituir_sites_por_marca(texto)
-        texto = limpar_sites_pesado_texto(texto)
-
-        if not texto or len(texto.strip()) < 2:
+        if not texto or len(texto) < 2:
             continue
 
         blocos.append((contador, tag, texto))
@@ -1297,8 +1025,6 @@ def coletar_blocos_texto(soup):
             continue
 
         texto = limpar_texto_pre_traducao(str(node))
-        texto = substituir_sites_por_marca(texto)
-        texto = limpar_sites_pesado_texto(texto)
 
         if len(texto.strip()) < 2:
             continue
@@ -1307,23 +1033,19 @@ def coletar_blocos_texto(soup):
         contador += 1
 
     return blocos
+
+
 def substituir_texto_no_item(item_html, texto_final):
-    """Mantém a tag e atributos, trocando só o conteúdo textual do bloco."""
     if hasattr(item_html, "clear") and hasattr(item_html, "append"):
-        attrs = dict(getattr(item_html, "attrs", {}) or {})
         item_html.clear()
-        for k, v in attrs.items():
-            item_html[k] = v
         item_html.append(NavigableString(texto_final))
     else:
         item_html.replace_with(NavigableString(texto_final))
 
 
-
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
     html = limpar_lixo_tecnico_bruto_html(html)
     soup = BeautifulSoup(html, "html.parser")
-    soup = limpar_sites_soup(soup)
     soup = limpar_lixo_tecnico_soup(soup)
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
@@ -1335,7 +1057,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
     if not nos:
         return str(soup), 0, []
 
-    blocos = montar_blocos_contextuais(nos)
+    blocos = montar_blocos(nos)
     workers = CONFIGS.get(mecanismo, CONFIGS["google_new"])["workers"]
     resultados = await traduzir_blocos(blocos, mecanismo, workers)
 
@@ -1376,7 +1098,6 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
                 erro["capitulo"] = capitulo
                 erros.append(erro)
 
-    soup = limpar_sites_soup(soup)
     soup = limpar_lixo_tecnico_soup(soup)
     html_final = str(soup)
     return html_final, alterados, erros
@@ -1650,6 +1371,7 @@ async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
     try:
         porcentagem = int((i / total) * 100)
         barra = barra_progresso(porcentagem)
+        bloco_erros = resumo_erros(erros, limite=3)
 
         await mensagem.edit_text(
             f"📚 Alma Scriptum Translate\n\n"
@@ -1657,9 +1379,8 @@ async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
             f"📖 Arquivo interno: {i}/{total}\n"
             f"📊 Progresso: {porcentagem}%\n\n"
             f"{barra}\n\n"
-            f"✨ Traduzindo com fallback adaptativo estilo Calibre... aguarde.\n"
-            f"🧾 Registro: {len(erros)} ponto(s) encontrado(s).\n"
-            f"📄 O TXT final vai trazer somente palavras/frases possivelmente não traduzidas."
+            f"✨ Traduzindo com fallback adaptativo... aguarde."
+            f"{bloco_erros}"
         )
     except Exception:
         pass
@@ -1669,39 +1390,24 @@ def salvar_log(nome_base, erros):
     if not erros:
         return None
 
-    apenas_nao_traduzidos = [
-        erro for erro in erros
-        if erro.get("nao_traduzidos")
-    ]
-
-    if not apenas_nao_traduzidos:
-        return None
-
-    caminho = TEMP_DIR / f"palavras_nao_traduzidas_{uuid.uuid4().hex}.txt"
+    caminho = TEMP_DIR / f"log_erros_{uuid.uuid4().hex}.txt"
 
     with open(caminho, "w", encoding="utf-8") as f:
-        f.write("PALAVRAS / FRASES POSSIVELMENTE NÃO TRADUZIDAS — ALMA SCRIPTUM\n")
-        f.write(f"Livro: {nome_base}\n")
+        f.write(f"LOG DE PONTOS COM ATENÇÃO — {nome_base}\n")
         f.write("=" * 70 + "\n\n")
 
-        for i, erro in enumerate(apenas_nao_traduzidos, start=1):
+        for i, erro in enumerate(erros, start=1):
             f.write(f"PONTO {i}\n")
-            f.write("-" * 70 + "\n")
-            f.write(f"Arquivo interno: {erro.get('arquivo', 'não identificado')}\n")
+            f.write(f"Arquivo: {erro.get('arquivo', 'não identificado')}\n")
             f.write(f"Capítulo: {erro.get('capitulo', 'Capítulo não identificado')}\n")
-            f.write(f"Palavra/frase possível: {erro.get('nao_traduzidos', '')}\n")
-
-            if erro.get("original"):
-                f.write("\nOriginal:\n")
-                f.write(str(erro.get("original", "")).strip() + "\n")
-
-            if erro.get("traducao"):
-                f.write("\nTradução:\n")
-                f.write(str(erro.get("traducao", "")).strip() + "\n")
-
-            f.write("\n" + "=" * 70 + "\n\n")
+            f.write(f"Bloco: {erro.get('bloco', 'não informado')}\n")
+            f.write(f"Trecho Nº: {erro.get('trecho_num', 'não informado')}\n")
+            f.write(f"Motivo: {erro.get('motivo', 'não informado')}\n")
+            f.write(f"Trecho exato:\n{erro.get('texto', 'não identificado')}\n")
+            f.write("\n" + "-" * 70 + "\n\n")
 
     return caminho
+
 
 
 def _normalizar_zip_path(caminho):
@@ -1834,7 +1540,7 @@ def adicionar_pagina_marca_zip(arquivos):
     return arquivos
 
 
-async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=False, nome_original=None):
+async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adicionar_marca=True, nome_original=None):
     erros = []
     traduzidos = 0
 
@@ -1897,16 +1603,6 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     nome_base_para_titulo = nome_original or Path(entrada).name
     titulo_final = criar_nome_final(nome_base_para_titulo)
-    # Limpeza final em arquivos de metadados/índice também
-    for _nome_arq in list(arquivos.keys()):
-        if _nome_arq.lower().endswith((".opf", ".ncx", ".xml")):
-            try:
-                _txt = arquivos[_nome_arq].decode("utf-8", errors="ignore")
-                _txt = limpar_sites_pesado_texto(_txt)
-                arquivos[_nome_arq] = _txt.encode("utf-8")
-            except Exception:
-                pass
-
     arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
 
     if adicionar_marca:
@@ -1947,7 +1643,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚡ Mantém estrutura do EPUB\n"
         "📖 EPUB Inglês → Português\n\n"
         f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
-        f"🖼️ Marca: ❌ Desativada para preservar a capa original\n\n"
+        f"🖼️ Marca: {marca}\n\n"
         "📤 Escolha o mecanismo e envie um EPUB.",
         reply_markup=teclado_principal(),
     )
@@ -1980,9 +1676,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         usuarios[user_id]["mecanismo"] = "google_old"
 
     elif query.data == "marca":
-        usuarios[user_id]["marca"] = False
-        await query.message.reply_text("🖼️ Marca desativada para preservar a capa original do livro.")
-        return
+        usuarios[user_id]["marca"] = not usuarios[user_id]["marca"]
 
     elif query.data == "cancelar":
         cancelamentos.add(user_id)
@@ -1998,7 +1692,7 @@ async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚡ Mantém estrutura do EPUB\n"
         "📖 EPUB Inglês → Português\n\n"
         f"⚙️ Mecanismo atual: {nome_mecanismo(mecanismo)}\n"
-        f"🖼️ Marca: ❌ Desativada para preservar a capa original\n\n"
+        f"🖼️ Marca: {marca}\n\n"
         "📤 Agora envie o EPUB.",
         reply_markup=teclado_principal(),
     )
@@ -2051,7 +1745,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mecanismo=mecanismo,
             user_id=user_id,
             mensagem=mensagem,
-            adicionar_marca=False,
+            adicionar_marca=usuarios[user_id]["marca"],
             nome_original=documento.file_name,
         )
 
@@ -2086,7 +1780,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await update.message.reply_document(
                     document=arquivo_telegram,
-                    caption="✨ Tradução concluída por Alma Scriptum Translate\n📝 Se houver palavras/frases não traduzidas, envio o TXT logo abaixo.",
+                    caption="✨ Tradução concluída por Alma Scriptum Translate",
                     read_timeout=300,
                     write_timeout=300,
                     connect_timeout=120,
@@ -2107,8 +1801,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with open(log_path, "rb") as log_file:
                     await update.message.reply_document(
                         document=log_file,
-                        filename="Palavras não traduzidas ✦ Alma Scriptum.txt",
-                        caption="📝 TXT enviado junto com o EPUB: somente palavras/frases possivelmente não traduzidas.",
+                        filename="Pontos de atenção ✦ Alma Scriptum.txt",
                     )
         else:
             await update.message.reply_text("✅ EPUB entregue sem erros detectados.")
@@ -2154,7 +1847,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
     app.add_error_handler(erro_global)
 
-    print("✅ Alma Scriptum Translate ADAPTATIVO CALIBRE-LIKE ONLINE!")
+    print("✅ Alma Scriptum Translate ESTÁVEL + CONTEXTO ONLINE!")
 
     app.run_polling()
 
