@@ -179,6 +179,7 @@ def revisar_texto_final(texto):
 
     texto = html_lib.unescape(str(texto))
     texto = substituir_sites_por_marca(texto)
+    texto = limpar_sites_pesado_texto(texto)
 
     texto = texto.replace("&quot;", '"')
     texto = texto.replace("&#39;", "'")
@@ -284,6 +285,100 @@ def preparar_contexto_para_traducao(textos):
         limpos.append(limpar_texto_pre_traducao(substituir_sites_por_marca(t)))
     return CALIBRE_SEPARATOR.join(limpos), limpos
 
+
+
+def texto_tem_site_sujo(texto):
+    if not texto:
+        return False
+
+    t = str(texto).lower()
+    compact = re.sub(r"[\s._\-:/\\]+", "", t)
+
+    padroes = [
+        "oceanofpdf", "oceanpdf", "oceanofbooks",
+        "zlibrary", "zlib", "z-lib", "1lib",
+        "annasarchive", "libgen", "bookfrom",
+        "wattpad.com", "img.wattpad.com",
+    ]
+
+    if any(p.replace("-", "") in compact for p in padroes):
+        return True
+
+    if re.search(r"https?://", t, flags=re.I):
+        return True
+
+    if re.search(r"www\.", t, flags=re.I):
+        return True
+
+    return False
+
+
+def limpar_sites_pesado_texto(texto):
+    if not texto:
+        return texto
+
+    texto = str(texto)
+
+    padroes = [
+        r"Ocean\s*of\s*PDF\.?\s*com",
+        r"OceanofPDF\.?\s*com",
+        r"OceanPDF\.?\s*com",
+        r"Ocean\s*PDF",
+        r"OceanofPDF",
+        r"z[\s\-_]*library(?:\.[a-z]{2,})?",
+        r"z[\s\-_]*lib(?:\.[a-z]{2,})?",
+        r"1lib(?:\.[a-z]{2,})?",
+        r"libgen(?:\.[a-z]{2,})?",
+        r"anna['’]?s[\s\-_]*archive",
+        r"wattpad\.com/\S+",
+        r"img\.wattpad\.com/\S+",
+        r"https?://\S+",
+        r"www\.\S+",
+    ]
+
+    for p in padroes:
+        texto = re.sub(p, "", texto, flags=re.I)
+
+    texto = re.sub(r"\b[A-Za-z0-9]{50,}\b", "", texto)
+    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
+    texto = re.sub(r"\s{2,}", " ", texto)
+
+    return texto.strip()
+
+
+def limpar_sites_soup(soup):
+    """
+    Remove propagandas/links de onde o livro foi pego.
+    Funciona em textos soltos, tags, links e capas HTML com OceanofPDF.
+    """
+    for tag in list(soup.find_all(["a", "p", "div", "span", "font", "center", "small", "i", "em", "b", "strong"])):
+        txt = tag.get_text(" ", strip=True)
+        attrs = " ".join(str(v) for v in tag.attrs.values())
+
+        if texto_tem_site_sujo(txt) or texto_tem_site_sujo(attrs):
+            tag.decompose()
+
+    for node in list(soup.find_all(string=True)):
+        parent = getattr(node, "parent", None)
+        parent_name = getattr(parent, "name", "") if parent else ""
+
+        if parent_name in ["script", "style"]:
+            continue
+
+        original = str(node)
+
+        if texto_tem_site_sujo(original):
+            node.extract()
+            continue
+
+        novo = limpar_sites_pesado_texto(original)
+        if novo != original:
+            if novo.strip():
+                node.replace_with(NavigableString(novo))
+            else:
+                node.extract()
+
+    return soup
 
 def texto_sujo(texto):
     if not texto:
@@ -564,6 +659,7 @@ def ordem_fallback(mecanismo_principal):
 def traduzir_com_retry(texto, mecanismo):
     ultimo_erro = None
     texto = substituir_sites_por_marca(texto)
+    texto = limpar_sites_pesado_texto(texto)
 
     for mecanismo_teste in ordem_fallback(mecanismo):
         for tentativa in range(REQUEST_ATTEMPTS):
@@ -611,6 +707,103 @@ def traduzir_com_fallback(texto, mecanismo):
 
     return " ".join(traduzidas), None
 
+
+
+def dividir_texto_adaptativo(texto, tamanho_max):
+    """
+    Divide texto quando todos os mecanismos falham.
+    Tenta manter frases/parágrafos inteiros, igual lógica adaptativa do Calibre.
+    """
+    texto = str(texto or "").strip()
+
+    if len(texto) <= tamanho_max:
+        return [texto] if texto else []
+
+    paragrafos = [p.strip() for p in re.split(r"\n\s*\n+", texto) if p.strip()]
+    partes = []
+    atual = ""
+
+    base = paragrafos if len(paragrafos) > 1 else re.split(r"(?<=[.!?])\s+", texto)
+
+    for pedaco in base:
+        pedaco = pedaco.strip()
+        if not pedaco:
+            continue
+
+        if len(pedaco) > tamanho_max:
+            if atual:
+                partes.append(atual.strip())
+                atual = ""
+
+            frases = re.split(r"(?<=[.!?])\s+", pedaco)
+            sub = ""
+            for frase in frases:
+                frase = frase.strip()
+                if not frase:
+                    continue
+
+                if len(sub) + len(frase) + 1 <= tamanho_max:
+                    sub = (sub + " " + frase).strip()
+                else:
+                    if sub:
+                        partes.append(sub.strip())
+                    sub = frase
+
+            if sub:
+                partes.append(sub.strip())
+
+            continue
+
+        if len(atual) + len(pedaco) + 2 <= tamanho_max:
+            atual = (atual + "\n\n" + pedaco).strip() if atual else pedaco
+        else:
+            if atual:
+                partes.append(atual.strip())
+            atual = pedaco
+
+    if atual:
+        partes.append(atual.strip())
+
+    return partes
+
+
+def traduzir_adaptativo(texto, mecanismo, nivel=0):
+    """
+    1. tenta mecanismo principal;
+    2. tenta fallback automático;
+    3. se falhar, reduz bloco;
+    4. traduz partes menores;
+    5. depois volta normal no próximo bloco.
+    """
+    texto = substituir_sites_por_marca(texto)
+    texto = limpar_sites_pesado_texto(texto)
+
+    traducao, erro = traduzir_com_retry(texto, mecanismo)
+
+    if not erro:
+        return traducao, None
+
+    limites = [1400, 900, 550, 320]
+
+    if nivel >= len(limites):
+        return revisar_texto_final(texto), erro
+
+    partes = dividir_texto_adaptativo(texto, limites[nivel])
+
+    if len(partes) <= 1:
+        return revisar_texto_final(texto), erro
+
+    traduzidas = []
+    falhas = []
+
+    for parte in partes:
+        t, e = traduzir_adaptativo(parte, mecanismo, nivel + 1)
+        traduzidas.append(t)
+
+        if e:
+            falhas.append(e)
+
+    return "\n\n".join(traduzidas), (None if not falhas else f"{len(falhas)} parte(s) com fallback/adaptação")
 
 def criar_sep(i):
     return SEP_TEMPLATE.format(format(i, "05"))
@@ -731,7 +924,7 @@ def traduzir_bloco_sync(item):
     bloco_id, textos, mecanismo = item
 
     junto, textos_limpos = preparar_contexto_para_traducao(textos)
-    traducao, erro = traduzir_com_retry(junto, mecanismo)
+    traducao, erro = traduzir_adaptativo(junto, mecanismo)
 
     if not erro:
         partes = separar_por_sep(traducao, len(textos_limpos))
@@ -751,7 +944,7 @@ def traduzir_bloco_sync(item):
             partes_finais.append(texto)
             continue
 
-        t, e = traduzir_com_fallback(texto, mecanismo)
+        t, e = traduzir_adaptativo(texto, mecanismo)
         texto_final = corrigir_coerencia_contextual(texto, revisar_texto_final(t))
         partes_finais.append(texto_final)
 
@@ -1095,6 +1288,7 @@ def coletar_blocos_texto(soup):
 
         texto = limpar_texto_pre_traducao(texto_bruto)
         texto = substituir_sites_por_marca(texto)
+        texto = limpar_sites_pesado_texto(texto)
 
         if not texto or len(texto.strip()) < 2:
             continue
@@ -1111,6 +1305,7 @@ def coletar_blocos_texto(soup):
 
         texto = limpar_texto_pre_traducao(str(node))
         texto = substituir_sites_por_marca(texto)
+        texto = limpar_sites_pesado_texto(texto)
 
         if len(texto.strip()) < 2:
             continue
@@ -1135,6 +1330,7 @@ def substituir_texto_no_item(item_html, texto_final):
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
     html = limpar_lixo_tecnico_bruto_html(html)
     soup = BeautifulSoup(html, "html.parser")
+    soup = limpar_sites_soup(soup)
     soup = limpar_lixo_tecnico_soup(soup)
     capitulo = contexto_capitulo(soup, arquivo_nome)
 
@@ -1187,6 +1383,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
                 erro["capitulo"] = capitulo
                 erros.append(erro)
 
+    soup = limpar_sites_soup(soup)
     soup = limpar_lixo_tecnico_soup(soup)
     html_final = str(soup)
     return html_final, alterados, erros
@@ -1467,7 +1664,7 @@ async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
             f"📖 Arquivo interno: {i}/{total}\n"
             f"📊 Progresso: {porcentagem}%\n\n"
             f"{barra}\n\n"
-            f"✨ Traduzindo por blocos contextuais... aguarde.\n"
+            f"✨ Traduzindo com fallback adaptativo estilo Calibre... aguarde.\n"
             f"🧾 Registro: {len(erros)} ponto(s) encontrado(s).\n"
             f"📄 O TXT final vai trazer somente palavras/frases possivelmente não traduzidas."
         )
@@ -1707,6 +1904,16 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     nome_base_para_titulo = nome_original or Path(entrada).name
     titulo_final = criar_nome_final(nome_base_para_titulo)
+    # Limpeza final em arquivos de metadados/índice também
+    for _nome_arq in list(arquivos.keys()):
+        if _nome_arq.lower().endswith((".opf", ".ncx", ".xml")):
+            try:
+                _txt = arquivos[_nome_arq].decode("utf-8", errors="ignore")
+                _txt = limpar_sites_pesado_texto(_txt)
+                arquivos[_nome_arq] = _txt.encode("utf-8")
+            except Exception:
+                pass
+
     arquivos = atualizar_titulo_epub_zip(arquivos, titulo_final)
 
     if adicionar_marca:
@@ -1952,7 +2159,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
     app.add_error_handler(erro_global)
 
-    print("✅ Alma Scriptum Translate CONTEXTUAL CALIBRE-LIKE ONLINE!")
+    print("✅ Alma Scriptum Translate ADAPTATIVO CALIBRE-LIKE ONLINE!")
 
     app.run_polling()
 
