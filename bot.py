@@ -662,6 +662,64 @@ def precisa_alerta_revisao(original, texto_final):
 
     return False
 
+
+def detectar_trechos_nao_traduzidos(original, texto_final):
+    """
+    Detecta frases/palavras que provavelmente ficaram em inglês depois da tradução.
+    Retorna uma lista curta para colocar no log final.
+    """
+    if not texto_final:
+        return []
+
+    texto = str(texto_final)
+
+    padroes = [
+        r"\b(the|and|with|your|you|she|he|they|this|that|was|were|have|from|into|would|could|should|because|before|after|when|where|what|why|how|then|there|here)\b",
+        r"\b(I|I'm|I've|I'll|I'd|don't|didn't|can't|couldn't|shouldn't|won't|wasn't|weren't|isn't|aren't)\b",
+    ]
+
+    encontrados = []
+
+    for p in padroes:
+        for m in re.finditer(p, texto, flags=re.I):
+            trecho = m.group(0).strip()
+            if trecho and trecho.lower() not in [e.lower() for e in encontrados]:
+                encontrados.append(trecho)
+
+    # Pega mini-frases ainda em inglês, mas evita nomes próprios curtos.
+    possiveis = re.findall(
+        r"\b(?:[A-Z]?[a-z]+(?:'t|'m|'re|'ve|'ll|'d)?\s+){1,5}(?:the|and|with|your|you|she|he|they|was|were|from|because|before|after)\b(?:\s+[A-Za-z']+){0,4}",
+        texto,
+        flags=re.I,
+    )
+
+    for trecho in possiveis:
+        trecho = re.sub(r"\s+", " ", trecho).strip()
+        if len(trecho) > 4 and trecho.lower() not in [e.lower() for e in encontrados]:
+            if not parece_nome_proprio_ou_lugar(trecho):
+                encontrados.append(trecho)
+
+    return encontrados[:8]
+
+
+def criar_erro_revisao(bloco_id, idx, original, texto_final, motivo_extra=None):
+    nao_traduzidos = detectar_trechos_nao_traduzidos(original, texto_final)
+
+    motivo = motivo_extra or "precisa de revisão"
+    if nao_traduzidos:
+        motivo = "trecho/palavra possivelmente não traduzido"
+
+    return {
+        "bloco": bloco_id,
+        "trecho_num": idx,
+        "motivo": motivo,
+        "original": texto_curto(original, 700),
+        "traducao": texto_curto(texto_final, 700),
+        "nao_traduzidos": ", ".join(nao_traduzidos) if nao_traduzidos else "",
+        "texto": texto_curto(texto_final, 420),
+    }
+
+
 def traduzir_bloco_sync(item):
     bloco_id, textos, mecanismo = item
 
@@ -691,12 +749,13 @@ def traduzir_bloco_sync(item):
         partes_finais.append(texto_final)
 
         if e and precisa_alerta_revisao(texto, texto_final):
-            erros.append({
-                "bloco": bloco_id,
-                "trecho_num": idx,
-                "motivo": "sobrou inglês/site/lixo técnico ou tradução incoerente",
-                "texto": texto_curto(texto_final),
-            })
+            erros.append(criar_erro_revisao(
+                bloco_id,
+                idx,
+                texto,
+                texto_final,
+                "sobrou inglês/site/lixo técnico ou tradução incoerente"
+            ))
 
     return bloco_id, partes_finais, erros
 
@@ -1270,16 +1329,23 @@ async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
     try:
         porcentagem = int((i / total) * 100)
         barra = barra_progresso(porcentagem)
-        bloco_erros = resumo_erros(erros, limite=3)
-
         await mensagem.edit_text(
-            f"📚 Alma Scriptum Translate\n\n"
-            f"⚙️ Mecanismo: {nome_mecanismo(mecanismo)}\n"
-            f"📖 Arquivo interno: {i}/{total}\n"
-            f"📊 Progresso: {porcentagem}%\n\n"
-            f"{barra}\n\n"
-            f"✨ Traduzindo... aguarde."
-            f"{bloco_erros}"
+            f"📚 Alma Scriptum Translate
+
+"
+            f"⚙️ Mecanismo: {nome_mecanismo(mecanismo)}
+"
+            f"📖 Arquivo interno: {i}/{total}
+"
+            f"📊 Progresso: {porcentagem}%
+
+"
+            f"{barra}
+
+"
+            f"✨ Traduzindo... aguarde.
+"
+            f"📝 Pontos de atenção serão enviados em TXT junto com o EPUB."
         )
     except Exception:
         pass
@@ -1289,23 +1355,59 @@ def salvar_log(nome_base, erros):
     if not erros:
         return None
 
-    caminho = TEMP_DIR / f"log_erros_{uuid.uuid4().hex}.txt"
+    apenas_nao_traduzidos = [
+        erro for erro in erros
+        if erro.get("nao_traduzidos")
+    ]
+
+    if not apenas_nao_traduzidos:
+        return None
+
+    caminho = TEMP_DIR / f"palavras_nao_traduzidas_{uuid.uuid4().hex}.txt"
 
     with open(caminho, "w", encoding="utf-8") as f:
-        f.write(f"LOG DE PONTOS COM ATENÇÃO — {nome_base}\n")
-        f.write("=" * 70 + "\n\n")
+        f.write("PALAVRAS / FRASES POSSIVELMENTE NÃO TRADUZIDAS — ALMA SCRIPTUM
+")
+        f.write(f"Livro: {nome_base}
+")
+        f.write("=" * 70 + "
 
-        for i, erro in enumerate(erros, start=1):
-            f.write(f"PONTO {i}\n")
-            f.write(f"Arquivo: {erro.get('arquivo', 'não identificado')}\n")
-            f.write(f"Capítulo: {erro.get('capitulo', 'Capítulo não identificado')}\n")
-            f.write(f"Bloco: {erro.get('bloco', 'não informado')}\n")
-            f.write(f"Trecho Nº: {erro.get('trecho_num', 'não informado')}\n")
-            f.write(f"Motivo: {erro.get('motivo', 'não informado')}\n")
-            f.write(f"Trecho exato:\n{erro.get('texto', 'não identificado')}\n")
-            f.write("\n" + "-" * 70 + "\n\n")
+")
+
+        for i, erro in enumerate(apenas_nao_traduzidos, start=1):
+            f.write(f"PONTO {i}
+")
+            f.write("-" * 70 + "
+")
+            f.write(f"Arquivo interno: {erro.get('arquivo', 'não identificado')}
+")
+            f.write(f"Capítulo: {erro.get('capitulo', 'Capítulo não identificado')}
+")
+            f.write(f"Palavra/frase possível: {erro.get('nao_traduzidos', '')}
+")
+
+            if erro.get("original"):
+                f.write("
+Original:
+")
+                f.write(str(erro.get("original", "")).strip() + "
+")
+
+            if erro.get("traducao"):
+                f.write("
+Tradução:
+")
+                f.write(str(erro.get("traducao", "")).strip() + "
+")
+
+            f.write("
+" + "=" * 70 + "
+
+")
 
     return caminho
+
+
 
 
 
@@ -1679,7 +1781,7 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await update.message.reply_document(
                     document=arquivo_telegram,
-                    caption="✨ Tradução concluída por Alma Scriptum Translate",
+                    caption="✨ Tradução concluída por Alma Scriptum Translate\n📝 Se houver palavras/frases não traduzidas, envio o TXT logo abaixo.",
                     read_timeout=300,
                     write_timeout=300,
                     connect_timeout=120,
@@ -1700,7 +1802,8 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 with open(log_path, "rb") as log_file:
                     await update.message.reply_document(
                         document=log_file,
-                        filename="Pontos de atenção ✦ Alma Scriptum.txt",
+                        filename="Palavras não traduzidas ✦ Alma Scriptum.txt",
+                        caption="📝 TXT enviado junto com o EPUB: somente palavras/frases possivelmente não traduzidas.",
                     )
         else:
             await update.message.reply_text("✅ EPUB entregue sem erros detectados.")
