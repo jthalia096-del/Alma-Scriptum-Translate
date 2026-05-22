@@ -41,7 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 1800
+MERGE_LENGTH = 2600
 # O plugin Ebook Translator usa separador de parágrafo por duas quebras de linha.
 # Mantemos isso para ficar mais parecido com o Calibre.
 CALIBRE_SEPARATOR = "\n\n"
@@ -191,6 +191,100 @@ def revisar_texto_final(texto):
     texto = re.sub(r"\s+", " ", texto)
 
     return texto.strip()
+
+def detectar_contexto_original(texto):
+    """Detecta contexto no texto original para corrigir ambiguidades."""
+    t = str(texto or "").lower()
+
+    armas = [
+        "gun", "guns", "shot", "shots", "shoot", "shooting", "shooter",
+        "fired", "firearm", "rifle", "pistol", "revolver", "bullet",
+        "bullets", "trigger", "barrel", "ammo", "weapon", "weapons",
+        "aim", "aimed", "target", "missed", "hit", "muzzle", "holster"
+    ]
+
+    futebol = [
+        "soccer", "football", "goal", "ball", "kick", "kicked",
+        "field", "goalkeeper", "match", "team", "penalty"
+    ]
+
+    contexto = set()
+
+    if sum(1 for p in armas if re.search(rf"\b{re.escape(p)}\b", t)) >= 1:
+        contexto.add("armas")
+
+    if sum(1 for p in futebol if re.search(rf"\b{re.escape(p)}\b", t)) >= 2:
+        contexto.add("futebol")
+
+    return contexto
+
+
+def corrigir_coerencia_contextual(original, traduzido):
+    """Correção leve pós-tradução baseada no original."""
+    if not traduzido:
+        return traduzido
+
+    texto = str(traduzido)
+    original_l = str(original or "").lower()
+    contexto = detectar_contexto_original(original)
+
+    if "armas" in contexto and "futebol" not in contexto:
+        if re.search(r"\bshot(s)?\b", original_l) or re.search(r"\bfired\b", original_l):
+            texto = re.sub(r"\bchute\b", "tiro", texto, flags=re.I)
+            texto = re.sub(r"\bchutes\b", "tiros", texto, flags=re.I)
+            texto = re.sub(r"\bpontapé\b", "tiro", texto, flags=re.I)
+            texto = re.sub(r"\bpontapés\b", "tiros", texto, flags=re.I)
+
+        if re.search(r"\bmissed\b", original_l):
+            texto = re.sub(r"\bsaiu para fora\b", "errou o alvo", texto, flags=re.I)
+            texto = re.sub(r"\berrou\b(?! o alvo)", "errou o alvo", texto, flags=re.I)
+
+    correcoes = {
+        "deTODOS": "de TODOS",
+        "TODOS.Cada": "TODOS. Cada",
+        "processo.A": "processo. A",
+        "trama.Bruxas": "trama. Bruxas",
+        "completaPara": "completa. Para",
+        "bemEspero": "bem? Espero",
+        "físicaSem": "física. Sem",
+        "fisicaSem": "física. Sem",
+        "semviolência": "sem violência",
+        "semviolencia": "sem violência",
+        "lágri mas": "lágrimas",
+        "lá gri mas": "lágrimas",
+        "gr ito": "grito",
+        "TO grito": "O grito",
+        "TO gr ito": "O grito",
+        "T O grito": "O grito",
+        "memó ria": "memória",
+        "fí sica": "física",
+        "rá pido": "rápido",
+        "cére bro": "cérebro",
+        "conse guir": "conseguir",
+        "sozin has": "sozinhas",
+        "emesse": "em esse",
+        "nessequarto": "nesse quarto",
+    }
+
+    for errado, certo in correcoes.items():
+        texto = texto.replace(errado, certo)
+
+    texto = re.sub(r"([a-záàâãéêíóôõúç])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})", r"\1 \2", texto)
+    texto = re.sub(r"([.!?;:])([A-ZÁÀÂÃÉÊÍÓÔÕÚÇA-Za-zÀ-ÿ])", r"\1 \2", texto)
+    texto = re.sub(r"\s+([,.!?;:])", r"\1", texto)
+    texto = re.sub(r"\s{2,}", " ", texto)
+
+    return texto.strip()
+
+
+def preparar_contexto_para_traducao(textos):
+    """Junta parágrafos com separador do estilo Calibre."""
+    limpos = []
+    for t in textos:
+        limpos.append(limpar_texto_pre_traducao(substituir_sites_por_marca(t)))
+    return CALIBRE_SEPARATOR.join(limpos), limpos
+
+
 def texto_sujo(texto):
     if not texto:
         return True
@@ -558,6 +652,10 @@ def precisa_alerta_revisao(original, texto_final):
     if len(palavras_ingles) >= 2 and not parece_nome_proprio_ou_lugar(texto_final):
         return True
 
+    if "armas" in detectar_contexto_original(original):
+        if re.search(r"\b(chute|chutes|pontapé|pontapés)\b", texto_final, flags=re.I):
+            return True
+
     if texto_final.strip().lower() == str(original).strip().lower():
         if re.search(r"\b(the|and|with|you|your|she|he|they|was|were|from)\b", original, flags=re.I):
             return True
@@ -567,49 +665,41 @@ def precisa_alerta_revisao(original, texto_final):
 def traduzir_bloco_sync(item):
     bloco_id, textos, mecanismo = item
 
-    textos = [substituir_sites_por_marca(t) for t in textos]
-
-    # Igual ao Ebook Translator/Calibre: junta com duas quebras de linha,
-    # em vez de marcador artificial {{id_00000}} no meio do texto.
-    junto = CALIBRE_SEPARATOR.join(textos)
-
+    junto, textos_limpos = preparar_contexto_para_traducao(textos)
     traducao, erro = traduzir_com_retry(junto, mecanismo)
 
     if not erro:
-        partes = separar_por_sep(traducao, len(textos))
+        partes = separar_por_sep(traducao, len(textos_limpos))
 
-        if len(partes) == len(textos):
-            partes = [revisar_texto_final(p) for p in partes]
+        if len(partes) == len(textos_limpos):
+            partes = [
+                corrigir_coerencia_contextual(original, revisar_texto_final(parte))
+                for original, parte in zip(textos_limpos, partes)
+            ]
             return bloco_id, partes, []
 
     partes_finais = []
     erros = []
 
-    for idx, texto in enumerate(textos, start=1):
-
+    for idx, texto in enumerate(textos_limpos, start=1):
         if texto_sujo(texto):
             partes_finais.append(texto)
             continue
 
         t, e = traduzir_com_fallback(texto, mecanismo)
-
-        texto_final = revisar_texto_final(t)
-
+        texto_final = corrigir_coerencia_contextual(texto, revisar_texto_final(t))
         partes_finais.append(texto_final)
 
-        # Só adiciona ponto de atenção
-        # se REALMENTE sobrou problema
-        if e:
-
-            if precisa_alerta_revisao(texto, texto_final):
-                erros.append({
-                    "bloco": bloco_id,
-                    "trecho_num": idx,
-                    "motivo": "sobrou inglês/site/lixo técnico",
-                    "texto": texto_curto(texto_final),
-                })
+        if e and precisa_alerta_revisao(texto, texto_final):
+            erros.append({
+                "bloco": bloco_id,
+                "trecho_num": idx,
+                "motivo": "sobrou inglês/site/lixo técnico ou tradução incoerente",
+                "texto": texto_curto(texto_final),
+            })
 
     return bloco_id, partes_finais, erros
+
 
 
 def texto_visivel(node):
@@ -840,11 +930,16 @@ def coletar_blocos_texto(soup):
 
     return blocos
 def substituir_texto_no_item(item_html, texto_final):
+    """Mantém a tag e atributos, trocando só o conteúdo textual do bloco."""
     if hasattr(item_html, "clear") and hasattr(item_html, "append"):
+        attrs = dict(getattr(item_html, "attrs", {}) or {})
         item_html.clear()
+        for k, v in attrs.items():
+            item_html[k] = v
         item_html.append(NavigableString(texto_final))
     else:
         item_html.replace_with(NavigableString(texto_final))
+
 
 
 async def traduzir_html(html, mecanismo, arquivo_nome=""):
@@ -1585,10 +1680,10 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_document(
                     document=arquivo_telegram,
                     caption="✨ Tradução concluída por Alma Scriptum Translate",
-                    read_timeout=180,
-                    write_timeout=180,
-                    connect_timeout=90,
-                    pool_timeout=90,
+                    read_timeout=300,
+                    write_timeout=300,
+                    connect_timeout=120,
+                    pool_timeout=120,
                 )
 
             except (NetworkError, TimedOut):
@@ -1639,10 +1734,10 @@ def main():
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .read_timeout(180)
-        .write_timeout(180)
-        .connect_timeout(90)
-        .pool_timeout(90)
+        .read_timeout(300)
+        .write_timeout(300)
+        .connect_timeout(120)
+        .pool_timeout(120)
         .build()
     )
 
@@ -1651,7 +1746,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
     app.add_error_handler(erro_global)
 
-    print("✅ Alma Scriptum Translate FALLBACK ONLINE!")
+    print("✅ Alma Scriptum Translate CONTEXTUAL ONLINE!")
 
     app.run_polling()
 
