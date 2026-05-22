@@ -41,7 +41,7 @@ MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 usuarios = {}
 cancelamentos = set()
 
-MERGE_LENGTH = 2600
+MERGE_LENGTH = 3200
 # O plugin Ebook Translator usa separador de parágrafo por duas quebras de linha.
 # Mantemos isso para ficar mais parecido com o Calibre.
 CALIBRE_SEPARATOR = "\n\n"
@@ -618,13 +618,14 @@ def criar_sep(i):
 
 def separar_por_sep(texto, quantidade):
     """
-    Alinhamento parecido com o plugin do Calibre:
-    ele junta trechos usando duas quebras de linha e depois separa de volta.
+    Alinhamento estilo Calibre:
+    tenta separar por parágrafos; se o Google voltar em bloco único,
+    completa sem quebrar o EPUB.
     """
     if quantidade <= 1:
         return [revisar_texto_final(texto)] if texto and texto.strip() else []
 
-    partes = [p.strip() for p in re.split(r"\n\s*\n+", texto) if p.strip()]
+    partes = [p.strip() for p in re.split(r"\n\s*\n+", str(texto)) if p.strip()]
 
     if len(partes) == quantidade:
         return partes
@@ -632,7 +633,13 @@ def separar_por_sep(texto, quantidade):
     if len(partes) > quantidade:
         return partes[:quantidade - 1] + ["\n\n".join(partes[quantidade - 1:])]
 
+    if len(partes) < quantidade:
+        while len(partes) < quantidade:
+            partes.append("")
+        return partes
+
     return partes
+
 def precisa_alerta_revisao(original, texto_final):
     """Evita ponto de atenção falso. Só avisa quando sobrou inglês/site/lixo."""
     if not texto_final or texto_sujo(texto_final):
@@ -749,15 +756,24 @@ def traduzir_bloco_sync(item):
         partes_finais.append(texto_final)
 
         if e and precisa_alerta_revisao(texto, texto_final):
-            erros.append(criar_erro_revisao(
-                bloco_id,
-                idx,
-                texto,
-                texto_final,
-                "sobrou inglês/site/lixo técnico ou tradução incoerente"
-            ))
+            if "criar_erro_revisao" in globals():
+                erros.append(criar_erro_revisao(
+                    bloco_id,
+                    idx,
+                    texto,
+                    texto_final,
+                    "sobrou inglês/site/lixo técnico ou tradução incoerente"
+                ))
+            else:
+                erros.append({
+                    "bloco": bloco_id,
+                    "trecho_num": idx,
+                    "motivo": "sobrou inglês/site/lixo técnico ou tradução incoerente",
+                    "texto": texto_curto(texto_final),
+                })
 
     return bloco_id, partes_finais, erros
+
 
 
 
@@ -823,6 +839,121 @@ def contexto_capitulo(soup, arquivo_nome=""):
 
     return "Capítulo não identificado"
 
+
+
+def eh_quebra_de_contexto(texto):
+    if not texto:
+        return True
+
+    t = re.sub(r"\s+", " ", str(texto)).strip()
+    low = t.lower()
+
+    if len(t) <= 2:
+        return True
+
+    padroes = [
+        r"^chapter\s+\d+",
+        r"^cap[ií]tulo\s+\d+",
+        r"^prologue$",
+        r"^pr[oó]logo$",
+        r"^epilogue$",
+        r"^ep[ií]logo$",
+        r"^\*{3,}$",
+        r"^[-–—]{3,}$",
+        r"^#\s*\d+",
+    ]
+
+    if any(re.search(p, low, flags=re.I) for p in padroes):
+        return True
+
+    palavras = t.split()
+    if len(palavras) <= 4 and (t.isupper() or parece_nome_proprio_ou_lugar(t)):
+        return True
+
+    return False
+
+
+def tipo_linha_contextual(texto):
+    t = str(texto or "").strip()
+
+    if eh_quebra_de_contexto(t):
+        return "quebra"
+
+    if re.match(r'^[“"\'—-]', t):
+        return "dialogo"
+
+    if re.search(r'[”"\']\s*(disse|perguntou|respondeu|murmurou|gritou|sussurrou|falou)\b', t, flags=re.I):
+        return "dialogo"
+
+    if len(t) <= 120 and not t.endswith(".") and not t.endswith("!") and not t.endswith("?"):
+        return "curto"
+
+    return "narracao"
+
+
+def pode_juntar_contexto(bloco_atual, item, tamanho_atual, limite):
+    _, _, texto = item
+    texto = limpar_texto_pre_traducao(texto)
+
+    if not bloco_atual:
+        return True
+
+    if eh_quebra_de_contexto(texto):
+        return False
+
+    if tamanho_atual + len(texto) + 2 > limite:
+        return False
+
+    ultimo_texto = bloco_atual[-1][2]
+    tipo_atual = tipo_linha_contextual(ultimo_texto)
+    tipo_novo = tipo_linha_contextual(texto)
+
+    if tipo_atual == "quebra" or tipo_novo == "quebra":
+        return False
+
+    if tipo_atual == "dialogo" and tipo_novo in ["dialogo", "narracao", "curto"]:
+        return True
+
+    if tipo_atual == "narracao" and tipo_novo in ["narracao", "dialogo", "curto"]:
+        return True
+
+    if tipo_novo == "curto":
+        return True
+
+    return True
+
+
+def montar_blocos_contextuais(nos, limite=None):
+    limite = limite or MERGE_LENGTH
+    blocos = []
+    bloco = []
+    tamanho = 0
+
+    for item in nos:
+        _, _, texto = item
+        texto_limpo = limpar_texto_pre_traducao(texto)
+        extra = len(texto_limpo) + 2
+
+        if eh_quebra_de_contexto(texto_limpo):
+            if bloco:
+                blocos.append(bloco)
+                bloco = []
+                tamanho = 0
+            blocos.append([item])
+            continue
+
+        if bloco and not pode_juntar_contexto(bloco, item, tamanho, limite):
+            blocos.append(bloco)
+            bloco = []
+            tamanho = 0
+
+        bloco.append(item)
+        tamanho += extra
+
+    if bloco:
+        blocos.append(bloco)
+
+    return blocos
 
 def montar_blocos(nos):
     blocos = []
@@ -1015,7 +1146,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
     if not nos:
         return str(soup), 0, []
 
-    blocos = montar_blocos(nos)
+    blocos = montar_blocos_contextuais(nos)
     workers = CONFIGS.get(mecanismo, CONFIGS["google_new"])["workers"]
     resultados = await traduzir_blocos(blocos, mecanismo, workers)
 
@@ -1336,7 +1467,7 @@ async def atualizar_progresso(mensagem, mecanismo, i, total, erros):
             f"📖 Arquivo interno: {i}/{total}\n"
             f"📊 Progresso: {porcentagem}%\n\n"
             f"{barra}\n\n"
-            f"✨ Traduzindo... aguarde.\n"
+            f"✨ Traduzindo por blocos contextuais... aguarde.\n"
             f"🧾 Registro: {len(erros)} ponto(s) encontrado(s).\n"
             f"📄 O TXT final vai trazer somente palavras/frases possivelmente não traduzidas."
         )
@@ -1821,7 +1952,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
     app.add_error_handler(erro_global)
 
-    print("✅ Alma Scriptum Translate CONTEXTUAL ONLINE!")
+    print("✅ Alma Scriptum Translate CONTEXTUAL CALIBRE-LIKE ONLINE!")
 
     app.run_polling()
 
