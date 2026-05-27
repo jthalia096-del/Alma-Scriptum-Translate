@@ -564,18 +564,171 @@ def corrigir_genero_por_memoria_dialogo(original, texto, memoria):
     return novo
 
 
+
+def detectar_pov_global_capitulo(originais, traduzidas):
+    """
+    Detector FORTE do POV no capítulo/arquivo inteiro.
+    Ele não depende de nome de personagem.
+    Serve para casos como:
+    - narrador homem falando "meu pênis", "cueca boxer", "sou o maior cara"
+    - narradora mulher falando "meu sutiã", "minha calcinha", "estou grávida"
+    """
+    original_all = " ".join(str(x or "") for x in originais).lower()
+    traducao_all = " ".join(str(x or "") for x in traduzidas).lower()
+
+    score_m = 0
+    score_f = 0
+
+    pistas_m_original = [
+        r"\bmy\s+(?:dick|cock|penis)\b",
+        r"\bboxer\s+briefs?\b",
+        r"\bi'?m\s+(?:a\s+)?(?:man|guy|boy|father|dad|husband|boyfriend|uncle)\b",
+        r"\bsingle\s+dad\b",
+        r"\bmy\s+best\s+friend\b.{0,120}\b(?:he|him|his)\b",
+    ]
+
+    pistas_f_original = [
+        r"\bmy\s+(?:bra|pussy|period)\b",
+        r"\bi'?m\s+(?:a\s+)?(?:woman|girl|mother|mom|wife|girlfriend|aunt)\b",
+        r"\bpregnan(?:t|cy)\b",
+        r"\bsingle\s+mom\b",
+        r"\bmy\s+best\s+friend\b.{0,120}\b(?:she|her|hers)\b",
+    ]
+
+    pistas_m_pt = [
+        r"\bmeu\s+p[eê]nis\b",
+        r"\bmeu\s+pau\b",
+        r"\bcueca\s+boxer\b",
+        r"\bsou\s+(?:um\s+)?(?:homem|cara|pai|marido|namorado|tio)\b",
+        r"\bo\s+maior\s+cara\b",
+        r"\bpai\s+solteiro\b",
+        r"\bmeu\s+melhor\s+amigo\b",
+    ]
+
+    pistas_f_pt = [
+        r"\bmeu\s+suti[ãa]\b",
+        r"\bminha\s+calcinha\b",
+        r"\bestou\s+gr[aá]vida\b",
+        r"\bsou\s+(?:uma\s+)?(?:mulher|garota|mãe|mae|esposa|namorada|tia)\b",
+        r"\bmãe\s+solteira\b",
+        r"\bminha\s+melhor\s+amiga\b",
+    ]
+
+    score_m += 6 * _contar_padroes(original_all, pistas_m_original)
+    score_f += 6 * _contar_padroes(original_all, pistas_f_original)
+    score_m += 6 * _contar_padroes(traducao_all, pistas_m_pt)
+    score_f += 6 * _contar_padroes(traducao_all, pistas_f_pt)
+
+    # Pistas menores de primeira pessoa.
+    score_m += len(re.findall(r"\bmeu\b", traducao_all)) // 8
+    score_f += len(re.findall(r"\bminha\b", traducao_all)) // 8
+
+    if score_m >= score_f + 4 and score_m >= 6:
+        return "M"
+    if score_f >= score_m + 4 and score_f >= 6:
+        return "F"
+
+    return None
+
+
+def corrigir_genero_primeira_pessoa_forte(texto, genero_pov):
+    """
+    Correção FINAL forte, mas ainda segura:
+    só mexe quando existe marcador de primeira pessoa perto.
+    Isso pega casos como:
+    'vou ficar muito irritada' -> 'vou ficar muito irritado'
+    quando o POV global é masculino.
+    """
+    if not texto or genero_pov not in ["M", "F"]:
+        return texto
+
+    novo = str(texto)
+
+    marcadores_antes = (
+        r"(?:\beu\b|\bme\b|\bmeu\b|\bminha\b|\bestou\b|\btô\b|\bto\b|\bfiquei\b|\bfico\b|"
+        r"\bsou\b|\bestava\b|\btava\b|\bcontinuo\b|\bme\s+sinto\b|\bsinto-me\b|"
+        r"\bvou\s+ficar\b|\bposso\s+ficar\b|\bdevo\s+ficar\b|\bcomecei\s+a\s+ficar\b|"
+        r"\bestou\s+ficando\b|\bfico\s+muito\b|\bvou\s+estar\b)"
+    )
+
+    for masc, fem in PARES_GENERO_ADJETIVOS:
+        if genero_pov == "M":
+            alvo, subst = fem, masc
+        else:
+            alvo, subst = masc, fem
+
+        # marcador até 160 caracteres antes do adjetivo
+        padrao = re.compile(rf"({marcadores_antes}(?:(?![.!?]).){{0,160}})\b{re.escape(alvo)}\b", flags=re.I | re.S)
+
+        def repl(m, subst=subst):
+            achado = re.search(rf"\b{re.escape(alvo)}\b", m.group(0), flags=re.I)
+            if not achado:
+                return m.group(0)
+            trecho = m.group(0)
+            return re.sub(rf"\b{re.escape(alvo)}\b", lambda x: _match_case(subst, x.group(0)), trecho, flags=re.I)
+
+        novo = padrao.sub(repl, novo)
+
+    return novo
+
+
+def corrigir_dialogo_feminino_forte(original, texto, memoria):
+    """
+    Correção especial para apelidos neutros em inglês traduzidos no gênero errado.
+    Exemplo real:
+    original: Obviously, kid.
+    contexto anterior: princess / daughter / girl
+    tradução ruim: É óbvio, garoto.
+    correção: É óbvio, garota.
+    """
+    if not texto:
+        return texto
+
+    memoria = memoria or {}
+    novo = str(texto)
+    original_l = str(original or "").lower()
+    hist = str(memoria.get("historico", "") or "").lower()
+
+    feminino_recente = any(p in hist[-4000:] for p in [
+        "princesa", "filha", "menina", "garota", "pequena", "minha filha", "minha garota", "june"
+    ])
+
+    masculino_real_agora = _tem_bloqueio_masculino_real(novo)
+    apelido_neutro_original = re.search(
+        r"\b(kid|squirt|honey|sweetheart|little one|baby|darling|dear)\b",
+        original_l,
+        flags=re.I,
+    )
+
+    if feminino_recente and not masculino_real_agora:
+        # Corrige só palavras de tratamento comuns, não mexe em frases inteiras.
+        if apelido_neutro_original or re.search(r"\bgaroto\b|\bpequeno\b|\bquerido\b", novo, flags=re.I):
+            novo = _trocar_palavra(novo, "garoto", "garota")
+            novo = _trocar_palavra(novo, "pequeno", "pequena")
+            novo = _trocar_palavra(novo, "querido", "querida")
+
+    return novo
+
+
 def revisar_genero_sequencia(originais, traduzidas):
     """
     Revisão GLOBAL e ordenada do capítulo/arquivo interno.
-    Essa é a parte que aumenta a memória: ela não revisa só o bloquinho isolado.
-    Ela passa por todos os parágrafos na ordem e carrega histórico longo.
+    VERSÃO 3:
+    - detecta POV forte do capítulo inteiro;
+    - aplica correção final de primeira pessoa;
+    - mantém memória longa de diálogo;
+    - corrige 'garoto/garota' por contexto anterior;
+    - não precisa cadastrar nome de personagem.
     """
+    pov_global = detectar_pov_global_capitulo(originais, traduzidas)
+
     memoria = {
         "historico": "",
         "alvo_dialogo": None,
         "forca_alvo": 0,
-        "pov_m": 0,
-        "pov_f": 0,
+        "pov_m": 28 if pov_global == "M" else 0,
+        "pov_f": 28 if pov_global == "F" else 0,
+        "pov_global": pov_global,
     }
 
     saida = []
@@ -585,23 +738,36 @@ def revisar_genero_sequencia(originais, traduzidas):
         original = str(original or "")
 
         score_m, score_f = _pontuar_genero_pov(original, texto)
-        memoria["pov_m"] = min(18, memoria.get("pov_m", 0) + score_m)
-        memoria["pov_f"] = min(18, memoria.get("pov_f", 0) + score_f)
+        memoria["pov_m"] = min(40, memoria.get("pov_m", 0) + score_m)
+        memoria["pov_f"] = min(40, memoria.get("pov_f", 0) + score_f)
 
-        genero_pov = detectar_genero_pov_seguro(original, texto, memoria)
+        genero_pov = pov_global or detectar_genero_pov_seguro(original, texto, memoria)
 
+        # 1) correção normal
         texto = corrigir_genero_primeira_pessoa(texto, genero_pov)
+
+        # 2) correção forte para primeira pessoa
+        texto = corrigir_genero_primeira_pessoa_forte(texto, genero_pov)
+
+        # 3) memória de diálogo
         texto = corrigir_genero_por_memoria_dialogo(original, texto, memoria)
+
+        # 4) reforço especial do caso kid/squirt -> garota quando havia princesa/filha antes
+        texto = corrigir_dialogo_feminino_forte(original, texto, memoria)
+
         texto = revisar_texto_final(texto)
 
         saida.append(texto)
 
-        # Decaimento leve do POV para poder mudar de narrador/cena.
-        memoria["pov_m"] = max(0, memoria.get("pov_m", 0) - 1)
-        memoria["pov_f"] = max(0, memoria.get("pov_f", 0) - 1)
+        # Atualiza histórico depois de todas as correções.
+        memoria["historico"] = (str(memoria.get("historico", "")) + " " + texto)[-12000:]
+
+        # Decaimento leve, mas não derruba o POV global.
+        if not pov_global:
+            memoria["pov_m"] = max(0, memoria.get("pov_m", 0) - 1)
+            memoria["pov_f"] = max(0, memoria.get("pov_f", 0) - 1)
 
     return saida
-
 
 def preparar_contexto_para_traducao(textos):
     """Junta parágrafos com separador do estilo Calibre."""
