@@ -282,64 +282,91 @@ def corrigir_coerencia_contextual(original, traduzido):
 
 
 # ==================================================
-# MEMÓRIA LONGA + REVISOR SEGURO DE GÊNERO
+# MEMÓRIA GLOBAL + REVISOR SEGURO DE GÊNERO — VERSÃO 4
 # ==================================================
-# Esta parte NÃO usa IA externa.
-# Ela corrige somente casos com boa confiança, usando:
-# - memória longa do diálogo;
-# - pistas do original em inglês;
-# - pistas da tradução;
-# - correção de primeira pessoa perto de "eu / estou / vou ficar".
+# NÃO usa IA externa.
+# Foi feito para romance, fantasia, harém reverso e dual/multi POV.
+# Ideia principal:
+# - aprende personagens automaticamente durante o EPUB;
+# - guarda memória temporária do livro inteiro;
+# - detecta POV por capítulo;
+# - identifica narrador externo/autora;
+# - corrige com força apenas primeira pessoa;
+# - corrige apelidos por relação/proximidade;
+# - usa sistema de confiança para não destruir cenas confusas.
+
+MODO_FANTASIA_SEGURO = True
+CONFIANCA_CORRIGIR_NORMAL = 7
+CONFIANCA_CORRIGIR_FANTASIA = 10
 
 PARES_GENERO_ADJETIVOS = [
-    ("irritado", "irritada"),
-    ("bravo", "brava"),
-    ("zangado", "zangada"),
-    ("cansado", "cansada"),
-    ("exausto", "exausta"),
-    ("pronto", "pronta"),
-    ("sozinho", "sozinha"),
-    ("preocupado", "preocupada"),
-    ("nervoso", "nervosa"),
-    ("animado", "animada"),
-    ("confuso", "confusa"),
-    ("culpado", "culpada"),
-    ("ferrado", "ferrada"),
-    ("apaixonado", "apaixonada"),
-    ("ocupado", "ocupada"),
-    ("assustado", "assustada"),
-    ("atrasado", "atrasada"),
-    ("chateado", "chateada"),
-    ("decepcionado", "decepcionada"),
-    ("envergonhado", "envergonhada"),
-    ("orgulhoso", "orgulhosa"),
-    ("obrigado", "obrigada"),
-    ("bonito", "bonita"),
-    ("lindo", "linda"),
+    ("irritado", "irritada"), ("bravo", "brava"), ("zangado", "zangada"),
+    ("cansado", "cansada"), ("exausto", "exausta"), ("pronto", "pronta"),
+    ("sozinho", "sozinha"), ("preocupado", "preocupada"), ("nervoso", "nervosa"),
+    ("animado", "animada"), ("confuso", "confusa"), ("culpado", "culpada"),
+    ("ferrado", "ferrada"), ("apaixonado", "apaixonada"), ("ocupado", "ocupada"),
+    ("assustado", "assustada"), ("atrasado", "atrasada"), ("chateado", "chateada"),
+    ("decepcionado", "decepcionada"), ("envergonhado", "envergonhada"),
+    ("orgulhoso", "orgulhosa"), ("obrigado", "obrigada"), ("bonito", "bonita"),
+    ("lindo", "linda"), ("doido", "doida"), ("louco", "louca"),
+    ("machucado", "machucada"), ("ferido", "ferida"), ("surpreso", "surpresa"),
+    ("tenso", "tensa"), ("perdido", "perdida"), ("fodido", "fodida"),
 ]
 
 FEM_DIALOGO_FORTE = [
-    "princesa", "filha", "menina", "garota", "pequena", "querida",
-    "mocinha", "minha garota", "minha menina", "minha filha", "jovem senhora",
+    "princesa", "filha", "menina", "garota", "pequena", "querida", "mocinha",
+    "minha garota", "minha menina", "minha filha", "jovem senhora", "bebê menina",
+    "garotinha", "princesinha", "senhorita",
 ]
 
 MASC_DIALOGO_FORTE = [
-    "príncipe", "filho", "menino", "garoto", "pequeno", "querido",
-    "mocinho", "meu garoto", "meu menino", "meu filho", "jovem senhor",
+    "príncipe", "filho", "menino", "garoto", "pequeno", "querido", "mocinho",
+    "meu garoto", "meu menino", "meu filho", "jovem senhor", "garotinho", "rapazinho",
 ]
 
-# Palavras masculinas que NÃO devem bloquear o feminino quando são só "papai/pai" da criança.
 MASC_BLOQUEIO_REAL = [
-    "meu pênis", "meu penis", "minha barba", "sou homem", "sou um homem",
-    "sou cara", "sou um cara", "o maior cara", "pai solteiro",
-    "marido", "namorado", "tio", "rapaz adulto",
+    "meu pênis", "meu penis", "meu pau", "minha barba", "sou homem", "sou um homem",
+    "sou cara", "sou um cara", "o maior cara", "pai solteiro", "marido", "namorado",
+    "tio", "rapaz adulto", "meu peito masculino", "cueca boxer",
 ]
 
 FEM_BLOQUEIO_REAL = [
     "meu sutiã", "meu sutia", "minha calcinha", "estou grávida", "estou gravida",
-    "sou mulher", "sou uma mulher", "sou garota", "sou uma garota",
-    "mãe solteira", "mae solteira", "esposa", "namorada", "tia",
+    "sou mulher", "sou uma mulher", "sou garota", "sou uma garota", "mãe solteira",
+    "mae solteira", "esposa", "namorada", "tia", "menstruação", "menstruacao",
 ]
+
+PALAVRAS_FANTASIA_CONFUSA = [
+    "magia", "mágico", "magica", "feiticeiro", "feiticeira", "bruxa", "bruxo", "fada",
+    "fae", "vampiro", "vampira", "lobo", "lobisomem", "dragão", "dragao", "demônio",
+    "demonio", "deusa", "deus", "alma", "corpo", "troca de corpo", "possessão", "possessao",
+    "metamorfo", "shifter", "mate", "vínculo", "vinculo", "harém", "harem", "reverso",
+]
+
+RELACOES_FEM_ORIGINAL = [
+    r"\bprincess\b", r"\bdaughter\b", r"\bgirl\b", r"\blittle girl\b", r"\bsweet girl\b",
+    r"\bmy girl\b", r"\bbaby girl\b", r"\bmommy\b", r"\bmother\b", r"\bwife\b",
+    r"\bgirlfriend\b", r"\bsister\b", r"\baunt\b",
+]
+
+RELACOES_MASC_ORIGINAL = [
+    r"\bprince\b", r"\bson\b", r"\bboy\b", r"\blittle boy\b", r"\bmy boy\b",
+    r"\bbaby boy\b", r"\bdaddy\b", r"\bfather\b", r"\bhusband\b", r"\bboyfriend\b",
+    r"\bbrother\b", r"\buncle\b",
+]
+
+APELIDOS_NEUTROS_ORIGINAL = r"\b(kid|squirt|honey|sweetheart|little one|baby|darling|dear|love)\b"
+
+
+def criar_memoria_livro():
+    return {
+        "personagens": {},       # nome -> {M:int, F:int}
+        "relacoes": {},          # nome -> lista de relações detectadas
+        "historico_livro": "",
+        "pov_capitulos": {},
+        "ultimo_pov": None,
+        "fantasia": False,
+    }
 
 
 def _contar_padroes(texto, padroes):
@@ -349,69 +376,6 @@ def _contar_padroes(texto, padroes):
         if re.search(p, texto, flags=re.I):
             total += 1
     return total
-
-
-def _pontuar_genero_pov(original, traduzido):
-    original_l = str(original or "").lower()
-    traduzido_l = str(traduzido or "").lower()
-
-    score_m = 0
-    score_f = 0
-
-    pistas_m_original = [
-        r"\bmy\s+(?:dick|cock|penis)\b",
-        r"\bi'?m\s+(?:a\s+)?(?:man|guy|boy|father|dad|husband|boyfriend|uncle)\b",
-        r"\bas\s+(?:a\s+)?(?:man|guy|father|dad|husband|boyfriend|uncle)\b",
-        r"\bmy\s+best\s+friend\b.*\b(?:he|him|his)\b",
-    ]
-    pistas_f_original = [
-        r"\bmy\s+(?:pussy|bra|period|pregnancy)\b",
-        r"\bi'?m\s+(?:a\s+)?(?:woman|girl|mother|mom|wife|girlfriend|aunt)\b",
-        r"\bas\s+(?:a\s+)?(?:woman|girl|mother|mom|wife|girlfriend|aunt)\b",
-        r"\bmy\s+best\s+friend\b.*\b(?:she|her|hers)\b",
-    ]
-
-    pistas_m_pt = [
-        r"\bmeu\s+p[eê]nis\b",
-        r"\bminha\s+barba\b",
-        r"\bsou\s+(?:um\s+)?(?:homem|cara|pai|marido|namorado|tio)\b",
-        r"\bo\s+maior\s+cara\b",
-        r"\bpai\s+solteiro\b",
-        r"\bmeu\s+melhor\s+amigo\b",
-    ]
-    pistas_f_pt = [
-        r"\bmeu\s+suti[ãa]\b",
-        r"\bminha\s+calcinha\b",
-        r"\bestou\s+gr[aá]vida\b",
-        r"\bsou\s+(?:uma\s+)?(?:mulher|garota|mãe|mae|esposa|namorada|tia)\b",
-        r"\bmãe\s+solteira\b",
-        r"\bminha\s+melhor\s+amiga\b",
-    ]
-
-    score_m += 4 * _contar_padroes(original_l, pistas_m_original)
-    score_f += 4 * _contar_padroes(original_l, pistas_f_original)
-    score_m += 4 * _contar_padroes(traduzido_l, pistas_m_pt)
-    score_f += 4 * _contar_padroes(traduzido_l, pistas_f_pt)
-
-    # Pistas de diálogo não são POV, têm peso menor.
-    score_f += sum(1 for p in FEM_DIALOGO_FORTE if p in traduzido_l)
-    score_m += sum(1 for p in MASC_DIALOGO_FORTE if p in traduzido_l)
-
-    return score_m, score_f
-
-
-def detectar_genero_pov_seguro(original, traduzido, memoria=None):
-    score_m, score_f = _pontuar_genero_pov(original, traduzido)
-
-    if memoria:
-        score_m += memoria.get("pov_m", 0)
-        score_f += memoria.get("pov_f", 0)
-
-    if score_m >= score_f + 3 and score_m >= 4:
-        return "M"
-    if score_f >= score_m + 3 and score_f >= 4:
-        return "F"
-    return None
 
 
 def _match_case(novo, antigo):
@@ -426,46 +390,6 @@ def _trocar_palavra(texto, de, para):
     def repl(m):
         return _match_case(para, m.group(0))
     return re.sub(rf"\b{re.escape(de)}\b", repl, texto, flags=re.I)
-
-
-def _corrigir_em_janela_primeira_pessoa(texto, alvo, substituto):
-    padrao = re.compile(rf"\b{re.escape(alvo)}\b", flags=re.I)
-    partes = []
-    ultimo = 0
-
-    marcadores = re.compile(
-        r"(?:\beu\b|\bestou\b|\btô\b|\bto\b|\bfiquei\b|\bfico\b|\bsou\b|\bestava\b|\btava\b|"
-        r"\bcontinuo\b|\bme\s+sinto\b|\bsinto-me\b|\bme\s+sentia\b|\bme\s+vi\b|"
-        r"\bvou\s+ficar\b|\bposso\s+ficar\b|\bdevo\s+ficar\b|\bcomecei\s+a\s+ficar\b)",
-        flags=re.I,
-    )
-
-    for m in padrao.finditer(texto):
-        inicio = max(0, m.start() - 120)
-        janela = texto[inicio:m.start()]
-
-        if marcadores.search(janela):
-            partes.append(texto[ultimo:m.start()])
-            partes.append(_match_case(substituto, m.group(0)))
-            ultimo = m.end()
-
-    partes.append(texto[ultimo:])
-    return "".join(partes)
-
-
-def corrigir_genero_primeira_pessoa(texto, genero_pov):
-    if not texto or genero_pov not in ["M", "F"]:
-        return texto
-
-    novo = str(texto)
-
-    for masc, fem in PARES_GENERO_ADJETIVOS:
-        if genero_pov == "M":
-            novo = _corrigir_em_janela_primeira_pessoa(novo, fem, masc)
-        else:
-            novo = _corrigir_em_janela_primeira_pessoa(novo, masc, fem)
-
-    return novo
 
 
 def _texto_indica_feminino(texto):
@@ -488,59 +412,288 @@ def _tem_bloqueio_feminino_real(texto):
     return any(p in t for p in FEM_BLOQUEIO_REAL)
 
 
-def corrigir_genero_por_memoria_dialogo(original, texto, memoria):
+def detectar_cena_fantasia_ou_confusa(original_all, traduzido_all):
+    t = (str(original_all or "") + " " + str(traduzido_all or "")).lower()
+    return any(p in t for p in PALAVRAS_FANTASIA_CONFUSA)
+
+
+def extrair_nomes_provaveis(texto):
+    """Extrai nomes próprios prováveis, evitando palavras comuns de início de frase."""
+    texto = str(texto or "")
+    comuns = {
+        "Chapter", "Prologue", "Epilogue", "The", "And", "But", "For", "This", "That", "There",
+        "Then", "When", "Where", "What", "Why", "How", "He", "She", "They", "We", "You", "I",
+        "His", "Her", "My", "Your", "A", "An", "In", "On", "At", "To", "From", "With",
+    }
+    nomes = []
+    for m in re.finditer(r"\b[A-Z][a-zA-Z'’\-]{2,}\b", texto):
+        nome = m.group(0)
+        if nome in comuns:
+            continue
+        if nome.lower() in ["google", "alma", "scriptum"]:
+            continue
+        nomes.append(nome)
+    return nomes[:20]
+
+
+def reforcar_personagem(memoria_livro, nome, genero, pontos=2, relacao=None):
+    if not memoria_livro or not nome or genero not in ["M", "F"]:
+        return
+    nome = str(nome).strip()
+    if len(nome) < 2:
+        return
+    personagens = memoria_livro.setdefault("personagens", {})
+    dados = personagens.setdefault(nome, {"M": 0, "F": 0})
+    dados[genero] = min(80, dados.get(genero, 0) + pontos)
+    if relacao:
+        memoria_livro.setdefault("relacoes", {}).setdefault(nome, [])
+        if relacao not in memoria_livro["relacoes"][nome]:
+            memoria_livro["relacoes"][nome].append(relacao)
+
+
+def genero_personagem(memoria_livro, nome):
+    if not memoria_livro or not nome:
+        return None, 0
+    dados = memoria_livro.get("personagens", {}).get(nome)
+    if not dados:
+        return None, 0
+    m = dados.get("M", 0)
+    f = dados.get("F", 0)
+    if f >= m + 3 and f >= 4:
+        return "F", f
+    if m >= f + 3 and m >= 4:
+        return "M", m
+    return None, max(m, f)
+
+
+def aprender_personagens_do_trecho(original, traduzido, memoria_livro):
+    if not memoria_livro:
+        return
+    original = str(original or "")
+    traduzido = str(traduzido or "")
+    junto_l = (original + " " + traduzido).lower()
+    nomes = extrair_nomes_provaveis(original)
+
+    # Se uma frase tem nome + she/her/princess/daughter/girl, reforça feminino.
+    # Se tem nome + he/him/prince/son/boy, reforça masculino.
+    for nome in nomes:
+        pad_nome = re.escape(nome)
+        janela_nome = re.search(rf"\b{pad_nome}\b(.{{0,120}})", original, flags=re.I | re.S)
+        janela = janela_nome.group(0).lower() if janela_nome else original.lower()
+
+        if re.search(r"\b(she|her|hers|princess|daughter|girl|mommy|mother|wife|girlfriend|sister)\b", janela):
+            reforcar_personagem(memoria_livro, nome, "F", 3, "pista feminina")
+        if re.search(r"\b(he|him|his|prince|son|boy|daddy|father|husband|boyfriend|brother)\b", janela):
+            reforcar_personagem(memoria_livro, nome, "M", 3, "pista masculina")
+
+    # Reforça com relações sem nome específico no histórico do livro.
+    if any(re.search(p, original, flags=re.I) for p in RELACOES_FEM_ORIGINAL) or _texto_indica_feminino(traduzido):
+        memoria_livro["historico_livro"] = (memoria_livro.get("historico_livro", "") + " FEM_REL " + traduzido)[-50000:]
+    if any(re.search(p, original, flags=re.I) for p in RELACOES_MASC_ORIGINAL) or _texto_indica_masculino(traduzido):
+        memoria_livro["historico_livro"] = (memoria_livro.get("historico_livro", "") + " MASC_REL " + traduzido)[-50000:]
+
+    if detectar_cena_fantasia_ou_confusa(original, traduzido):
+        memoria_livro["fantasia"] = True
+
+
+def _pontuar_genero_pov(original, traduzido):
+    original_l = str(original or "").lower()
+    traduzido_l = str(traduzido or "").lower()
+
+    score_m = 0
+    score_f = 0
+
+    pistas_m_original = [
+        r"\bmy\s+(?:dick|cock|penis)\b", r"\bboxer\s+briefs?\b",
+        r"\bi'?m\s+(?:a\s+)?(?:man|guy|boy|father|dad|husband|boyfriend|uncle)\b",
+        r"\bsingle\s+dad\b", r"\bmy\s+best\s+friend\b.{0,120}\b(?:he|him|his)\b",
+    ]
+    pistas_f_original = [
+        r"\bmy\s+(?:bra|pussy|period)\b", r"\bi'?m\s+(?:a\s+)?(?:woman|girl|mother|mom|wife|girlfriend|aunt)\b",
+        r"\bpregnan(?:t|cy)\b", r"\bsingle\s+mom\b", r"\bmy\s+best\s+friend\b.{0,120}\b(?:she|her|hers)\b",
+    ]
+    pistas_m_pt = [
+        r"\bmeu\s+p[eê]nis\b", r"\bmeu\s+pau\b", r"\bcueca\s+boxer\b",
+        r"\bsou\s+(?:um\s+)?(?:homem|cara|pai|marido|namorado|tio)\b", r"\bo\s+maior\s+cara\b",
+        r"\bpai\s+solteiro\b", r"\bmeu\s+melhor\s+amigo\b",
+    ]
+    pistas_f_pt = [
+        r"\bmeu\s+suti[ãa]\b", r"\bminha\s+calcinha\b", r"\bestou\s+gr[aá]vida\b",
+        r"\bsou\s+(?:uma\s+)?(?:mulher|garota|mãe|mae|esposa|namorada|tia)\b",
+        r"\bmãe\s+solteira\b", r"\bminha\s+melhor\s+amiga\b",
+    ]
+
+    score_m += 6 * _contar_padroes(original_l, pistas_m_original)
+    score_f += 6 * _contar_padroes(original_l, pistas_f_original)
+    score_m += 6 * _contar_padroes(traduzido_l, pistas_m_pt)
+    score_f += 6 * _contar_padroes(traduzido_l, pistas_f_pt)
+
+    # Pistas de diálogo contam pouco porque podem ser outro personagem.
+    score_f += sum(1 for p in FEM_DIALOGO_FORTE if p in traduzido_l)
+    score_m += sum(1 for p in MASC_DIALOGO_FORTE if p in traduzido_l)
+
+    return score_m, score_f
+
+
+def detectar_narrador_externo(originais, traduzidas):
+    """Detecta terceira pessoa/narrador externo para evitar forçar gênero do 'eu'."""
+    texto = (" ".join(str(x or "") for x in originais) + " " + " ".join(str(x or "") for x in traduzidas)).lower()
+    primeira = len(re.findall(r"\b(i|i'm|i’ve|i'll|my|me|eu|meu|minha|estou|sou|fiquei|vou)\b", texto, flags=re.I))
+    terceira = len(re.findall(r"\b(she|her|he|him|his|ela|ele|dela|dele|sua|seu)\b", texto, flags=re.I))
+    dialogos = texto.count('"') + texto.count('“') + texto.count('”')
+    if terceira >= primeira * 3 + 8 and primeira <= 8:
+        return True
+    if terceira >= 25 and primeira <= 4 and dialogos < 12:
+        return True
+    return False
+
+
+def detectar_pov_global_capitulo(originais, traduzidas, memoria_livro=None, capitulo=""):
+    original_all = " ".join(str(x or "") for x in originais).lower()
+    traducao_all = " ".join(str(x or "") for x in traduzidas).lower()
+
+    if detectar_narrador_externo(originais, traduzidas):
+        return "EXTERNO", 0
+
+    score_m, score_f = _pontuar_genero_pov(original_all, traducao_all)
+
+    # Nomes de capítulo às vezes são o nome do POV. Se já aprendemos o personagem, usa como pista.
+    if memoria_livro and capitulo:
+        for nome in extrair_nomes_provaveis(capitulo):
+            g, conf = genero_personagem(memoria_livro, nome)
+            if g == "M":
+                score_m += min(10, conf)
+            elif g == "F":
+                score_f += min(10, conf)
+
+    # Detecta capítulos por título tipo "MAV", "DALLAS" quando já existe memória.
+    if memoria_livro:
+        nomes_no_texto = extrair_nomes_provaveis(capitulo or "")
+        for nome in nomes_no_texto:
+            g, conf = genero_personagem(memoria_livro, nome)
+            if g == "M": score_m += conf
+            if g == "F": score_f += conf
+
+    if score_m >= score_f + 4 and score_m >= 6:
+        return "M", score_m
+    if score_f >= score_m + 4 and score_f >= 6:
+        return "F", score_f
+    return None, max(score_m, score_f)
+
+
+def detectar_genero_pov_seguro(original, traduzido, memoria=None):
+    score_m, score_f = _pontuar_genero_pov(original, traduzido)
+    if memoria:
+        score_m += memoria.get("pov_m", 0)
+        score_f += memoria.get("pov_f", 0)
+    if score_m >= score_f + 3 and score_m >= 4:
+        return "M"
+    if score_f >= score_m + 3 and score_f >= 4:
+        return "F"
+    return None
+
+
+def _corrigir_em_janela_primeira_pessoa(texto, alvo, substituto, janela_chars=140):
+    padrao = re.compile(rf"\b{re.escape(alvo)}\b", flags=re.I)
+    partes = []
+    ultimo = 0
+    marcadores = re.compile(
+        r"(?:\beu\b|\bme\b|\bmeu\b|\bminha\b|\bestou\b|\btô\b|\bto\b|\bfiquei\b|\bfico\b|"
+        r"\bsou\b|\bestava\b|\btava\b|\bcontinuo\b|\bme\s+sinto\b|\bsinto-me\b|"
+        r"\bme\s+sentia\b|\bme\s+vi\b|\bvou\s+ficar\b|\bposso\s+ficar\b|"
+        r"\bdevo\s+ficar\b|\bcomecei\s+a\s+ficar\b|\bestou\s+ficando\b)",
+        flags=re.I,
+    )
+    for m in padrao.finditer(texto):
+        inicio = max(0, m.start() - janela_chars)
+        janela = texto[inicio:m.start()]
+        # Não atravessa muita pontuação: reduz risco em diálogos misturados.
+        if len(re.findall(r"[.!?]", janela)) > 1:
+            continue
+        if marcadores.search(janela):
+            partes.append(texto[ultimo:m.start()])
+            partes.append(_match_case(substituto, m.group(0)))
+            ultimo = m.end()
+    partes.append(texto[ultimo:])
+    return "".join(partes)
+
+
+def corrigir_genero_primeira_pessoa(texto, genero_pov):
+    if not texto or genero_pov not in ["M", "F"]:
+        return texto
+    novo = str(texto)
+    for masc, fem in PARES_GENERO_ADJETIVOS:
+        if genero_pov == "M":
+            novo = _corrigir_em_janela_primeira_pessoa(novo, fem, masc, 150)
+        else:
+            novo = _corrigir_em_janela_primeira_pessoa(novo, masc, fem, 150)
+    return novo
+
+
+def corrigir_genero_primeira_pessoa_forte(texto, genero_pov, confianca=0, fantasia=False):
+    if not texto or genero_pov not in ["M", "F"]:
+        return texto
+    limite = CONFIANCA_CORRIGIR_FANTASIA if fantasia else CONFIANCA_CORRIGIR_NORMAL
+    if confianca < limite:
+        return corrigir_genero_primeira_pessoa(texto, genero_pov)
+    novo = str(texto)
+    for masc, fem in PARES_GENERO_ADJETIVOS:
+        if genero_pov == "M":
+            novo = _corrigir_em_janela_primeira_pessoa(novo, fem, masc, 220)
+        else:
+            novo = _corrigir_em_janela_primeira_pessoa(novo, masc, fem, 220)
+    return novo
+
+
+def corrigir_genero_por_memoria_dialogo(original, texto, memoria, memoria_livro=None):
     if not texto:
         return texto
-
     memoria = memoria or {}
     novo = str(texto)
     original_l = str(original or "").lower()
-
     hist = memoria.get("historico", "")
-    hist_longo = (hist + " " + novo)[-7000:].lower()
-    hist_curto = (hist + " " + novo)[-1800:].lower()
+    hist_longo = (hist + " " + novo)[-9000:].lower()
+    hist_curto = (hist + " " + novo)[-2500:].lower()
 
-    # Atualiza alvo do diálogo com base no histórico longo.
     if _texto_indica_feminino(hist_longo) and not _tem_bloqueio_masculino_real(hist_curto):
         memoria["alvo_dialogo"] = "F"
-        memoria["forca_alvo"] = min(12, memoria.get("forca_alvo", 0) + 3)
+        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 3)
     elif _texto_indica_masculino(hist_longo) and not _tem_bloqueio_feminino_real(hist_curto):
-        # Masculino só assume se não houver pista feminina recente forte.
         if not any(p in hist_curto for p in ["princesa", "filha", "menina", "garota", "pequena"]):
             memoria["alvo_dialogo"] = "M"
-            memoria["forca_alvo"] = min(12, memoria.get("forca_alvo", 0) + 3)
+            memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 3)
 
     alvo = memoria.get("alvo_dialogo")
     forca = memoria.get("forca_alvo", 0)
+    fantasia = bool(memoria.get("fantasia") or (memoria_livro or {}).get("fantasia"))
+    limite = 7 if fantasia else 4
 
-    original_tem_apelido_neutro = re.search(
-        r"\b(kid|squirt|honey|sweetheart|little one|baby|darling|dear)\b",
-        original_l,
-        flags=re.I,
-    )
+    original_tem_apelido_neutro = re.search(APELIDOS_NEUTROS_ORIGINAL, original_l, flags=re.I)
+    original_tem_feminino = any(re.search(p, original_l, flags=re.I) for p in RELACOES_FEM_ORIGINAL)
+    original_tem_masculino = any(re.search(p, original_l, flags=re.I) for p in RELACOES_MASC_ORIGINAL)
 
-    original_tem_feminino = re.search(
-        r"\b(princess|girl|daughter|sweet girl|little girl)\b",
-        original_l,
-        flags=re.I,
-    )
+    # Se o original aponta para nome conhecido no livro, usa o gênero aprendido.
+    genero_nome = None
+    conf_nome = 0
+    if memoria_livro:
+        for nome in extrair_nomes_provaveis(original):
+            g, conf = genero_personagem(memoria_livro, nome)
+            if conf > conf_nome:
+                genero_nome, conf_nome = g, conf
 
-    original_tem_masculino = re.search(
-        r"\b(prince|boy|son|little boy)\b",
-        original_l,
-        flags=re.I,
-    )
+    if genero_nome and conf_nome >= 6:
+        alvo = genero_nome
+        forca = max(forca, min(14, conf_nome))
 
-    # Correção segura para o caso do seu print: princess/daughter/girl antes + kid traduzido como garoto.
-    if alvo == "F" and forca >= 3 and (original_tem_apelido_neutro or original_tem_feminino or "garoto" in novo.lower()):
+    # Feminino: kid/squirt/baby/honey quando histórico tem princess/daughter/girl.
+    if alvo == "F" and forca >= limite and (original_tem_apelido_neutro or original_tem_feminino or re.search(r"\bgaroto\b|\bpequeno\b|\bquerido\b", novo, flags=re.I)):
         if not _tem_bloqueio_masculino_real(novo):
             novo = _trocar_palavra(novo, "garoto", "garota")
             novo = _trocar_palavra(novo, "pequeno", "pequena")
             novo = _trocar_palavra(novo, "querido", "querida")
             novo = _trocar_palavra(novo, "bonito", "bonita")
             novo = _trocar_palavra(novo, "lindo", "linda")
-
-    elif alvo == "M" and forca >= 3 and (original_tem_apelido_neutro or original_tem_masculino):
+    elif alvo == "M" and forca >= limite and (original_tem_apelido_neutro or original_tem_masculino):
         if not _tem_bloqueio_feminino_real(novo):
             novo = _trocar_palavra(novo, "garota", "garoto")
             novo = _trocar_palavra(novo, "pequena", "pequeno")
@@ -548,187 +701,75 @@ def corrigir_genero_por_memoria_dialogo(original, texto, memoria):
             novo = _trocar_palavra(novo, "bonita", "bonito")
             novo = _trocar_palavra(novo, "linda", "lindo")
 
-    # Reforça memória depois da correção.
     if _texto_indica_feminino(novo):
         memoria["alvo_dialogo"] = "F"
-        memoria["forca_alvo"] = min(12, memoria.get("forca_alvo", 0) + 2)
+        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 2)
     elif _texto_indica_masculino(novo) and not any(p in hist_curto for p in ["princesa", "filha", "menina", "garota"]):
         memoria["alvo_dialogo"] = "M"
-        memoria["forca_alvo"] = min(12, memoria.get("forca_alvo", 0) + 2)
+        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 2)
 
-    memoria["historico"] = (hist + " " + novo)[-9000:]
-
-    # A força vai caindo lentamente para não carregar gênero para outra cena inteira.
+    memoria["historico"] = (hist + " " + novo)[-14000:]
     memoria["forca_alvo"] = max(0, memoria.get("forca_alvo", 0) - 1)
-
     return novo
 
 
-
-def detectar_pov_global_capitulo(originais, traduzidas):
-    """
-    Detector FORTE do POV no capítulo/arquivo inteiro.
-    Ele não depende de nome de personagem.
-    Serve para casos como:
-    - narrador homem falando "meu pênis", "cueca boxer", "sou o maior cara"
-    - narradora mulher falando "meu sutiã", "minha calcinha", "estou grávida"
-    """
-    original_all = " ".join(str(x or "") for x in originais).lower()
-    traducao_all = " ".join(str(x or "") for x in traduzidas).lower()
-
-    score_m = 0
-    score_f = 0
-
-    pistas_m_original = [
-        r"\bmy\s+(?:dick|cock|penis)\b",
-        r"\bboxer\s+briefs?\b",
-        r"\bi'?m\s+(?:a\s+)?(?:man|guy|boy|father|dad|husband|boyfriend|uncle)\b",
-        r"\bsingle\s+dad\b",
-        r"\bmy\s+best\s+friend\b.{0,120}\b(?:he|him|his)\b",
-    ]
-
-    pistas_f_original = [
-        r"\bmy\s+(?:bra|pussy|period)\b",
-        r"\bi'?m\s+(?:a\s+)?(?:woman|girl|mother|mom|wife|girlfriend|aunt)\b",
-        r"\bpregnan(?:t|cy)\b",
-        r"\bsingle\s+mom\b",
-        r"\bmy\s+best\s+friend\b.{0,120}\b(?:she|her|hers)\b",
-    ]
-
-    pistas_m_pt = [
-        r"\bmeu\s+p[eê]nis\b",
-        r"\bmeu\s+pau\b",
-        r"\bcueca\s+boxer\b",
-        r"\bsou\s+(?:um\s+)?(?:homem|cara|pai|marido|namorado|tio)\b",
-        r"\bo\s+maior\s+cara\b",
-        r"\bpai\s+solteiro\b",
-        r"\bmeu\s+melhor\s+amigo\b",
-    ]
-
-    pistas_f_pt = [
-        r"\bmeu\s+suti[ãa]\b",
-        r"\bminha\s+calcinha\b",
-        r"\bestou\s+gr[aá]vida\b",
-        r"\bsou\s+(?:uma\s+)?(?:mulher|garota|mãe|mae|esposa|namorada|tia)\b",
-        r"\bmãe\s+solteira\b",
-        r"\bminha\s+melhor\s+amiga\b",
-    ]
-
-    score_m += 6 * _contar_padroes(original_all, pistas_m_original)
-    score_f += 6 * _contar_padroes(original_all, pistas_f_original)
-    score_m += 6 * _contar_padroes(traducao_all, pistas_m_pt)
-    score_f += 6 * _contar_padroes(traducao_all, pistas_f_pt)
-
-    # Pistas menores de primeira pessoa.
-    score_m += len(re.findall(r"\bmeu\b", traducao_all)) // 8
-    score_f += len(re.findall(r"\bminha\b", traducao_all)) // 8
-
-    if score_m >= score_f + 4 and score_m >= 6:
-        return "M"
-    if score_f >= score_m + 4 and score_f >= 6:
-        return "F"
-
-    return None
-
-
-def corrigir_genero_primeira_pessoa_forte(texto, genero_pov):
-    """
-    Correção FINAL forte, mas ainda segura:
-    só mexe quando existe marcador de primeira pessoa perto.
-    Isso pega casos como:
-    'vou ficar muito irritada' -> 'vou ficar muito irritado'
-    quando o POV global é masculino.
-    """
-    if not texto or genero_pov not in ["M", "F"]:
-        return texto
-
-    novo = str(texto)
-
-    marcadores_antes = (
-        r"(?:\beu\b|\bme\b|\bmeu\b|\bminha\b|\bestou\b|\btô\b|\bto\b|\bfiquei\b|\bfico\b|"
-        r"\bsou\b|\bestava\b|\btava\b|\bcontinuo\b|\bme\s+sinto\b|\bsinto-me\b|"
-        r"\bvou\s+ficar\b|\bposso\s+ficar\b|\bdevo\s+ficar\b|\bcomecei\s+a\s+ficar\b|"
-        r"\bestou\s+ficando\b|\bfico\s+muito\b|\bvou\s+estar\b)"
-    )
-
-    for masc, fem in PARES_GENERO_ADJETIVOS:
-        if genero_pov == "M":
-            alvo, subst = fem, masc
-        else:
-            alvo, subst = masc, fem
-
-        # marcador até 160 caracteres antes do adjetivo
-        padrao = re.compile(rf"({marcadores_antes}(?:(?![.!?]).){{0,160}})\b{re.escape(alvo)}\b", flags=re.I | re.S)
-
-        def repl(m, subst=subst):
-            achado = re.search(rf"\b{re.escape(alvo)}\b", m.group(0), flags=re.I)
-            if not achado:
-                return m.group(0)
-            trecho = m.group(0)
-            return re.sub(rf"\b{re.escape(alvo)}\b", lambda x: _match_case(subst, x.group(0)), trecho, flags=re.I)
-
-        novo = padrao.sub(repl, novo)
-
-    return novo
-
-
-def corrigir_dialogo_feminino_forte(original, texto, memoria):
-    """
-    Correção especial para apelidos neutros em inglês traduzidos no gênero errado.
-    Exemplo real:
-    original: Obviously, kid.
-    contexto anterior: princess / daughter / girl
-    tradução ruim: É óbvio, garoto.
-    correção: É óbvio, garota.
-    """
+def corrigir_dialogo_feminino_forte(original, texto, memoria, memoria_livro=None):
     if not texto:
         return texto
-
-    memoria = memoria or {}
     novo = str(texto)
     original_l = str(original or "").lower()
     hist = str(memoria.get("historico", "") or "").lower()
+    hist_livro = str((memoria_livro or {}).get("historico_livro", "") or "").lower()
 
-    feminino_recente = any(p in hist[-4000:] for p in [
-        "princesa", "filha", "menina", "garota", "pequena", "minha filha", "minha garota", "june"
+    feminino_recente = any(p in hist[-6000:] for p in [
+        "princesa", "filha", "menina", "garota", "pequena", "minha filha", "minha garota", "senhorita"
     ])
-
+    feminino_livro = "fem_rel" in hist_livro[-12000:]
     masculino_real_agora = _tem_bloqueio_masculino_real(novo)
-    apelido_neutro_original = re.search(
-        r"\b(kid|squirt|honey|sweetheart|little one|baby|darling|dear)\b",
-        original_l,
-        flags=re.I,
-    )
+    apelido_neutro_original = re.search(APELIDOS_NEUTROS_ORIGINAL, original_l, flags=re.I)
 
-    if feminino_recente and not masculino_real_agora:
-        # Corrige só palavras de tratamento comuns, não mexe em frases inteiras.
+    if (feminino_recente or feminino_livro) and not masculino_real_agora:
         if apelido_neutro_original or re.search(r"\bgaroto\b|\bpequeno\b|\bquerido\b", novo, flags=re.I):
             novo = _trocar_palavra(novo, "garoto", "garota")
             novo = _trocar_palavra(novo, "pequeno", "pequena")
             novo = _trocar_palavra(novo, "querido", "querida")
-
     return novo
 
 
-def revisar_genero_sequencia(originais, traduzidas):
+def revisar_genero_sequencia(originais, traduzidas, memoria_livro=None, capitulo=""):
     """
-    Revisão GLOBAL e ordenada do capítulo/arquivo interno.
-    VERSÃO 3:
-    - detecta POV forte do capítulo inteiro;
-    - aplica correção final de primeira pessoa;
-    - mantém memória longa de diálogo;
-    - corrige 'garoto/garota' por contexto anterior;
-    - não precisa cadastrar nome de personagem.
+    Revisão GLOBAL ordenada do capítulo/arquivo interno.
+    VERSÃO 4:
+    1. memória temporária do livro inteiro;
+    2. dicionário automático de personagens;
+    3. memória de POV por capítulo;
+    4. modo narrador externo/autora;
+    5. corretor forte de primeira pessoa;
+    6. memória de relação;
+    7. sistema de confiança conservador para fantasia/harém reverso.
     """
-    pov_global = detectar_pov_global_capitulo(originais, traduzidas)
+    if memoria_livro is None:
+        memoria_livro = criar_memoria_livro()
+
+    original_all = " ".join(str(x or "") for x in originais)
+    traduzido_all = " ".join(str(x or "") for x in traduzidas)
+    fantasia = detectar_cena_fantasia_ou_confusa(original_all, traduzido_all) or bool(memoria_livro.get("fantasia"))
+    if fantasia:
+        memoria_livro["fantasia"] = True
+
+    pov_global, confianca_pov = detectar_pov_global_capitulo(originais, traduzidas, memoria_livro, capitulo)
+    if pov_global in ["M", "F"]:
+        memoria_livro.setdefault("pov_capitulos", {})[capitulo or f"cap_{len(memoria_livro.get('pov_capitulos', {}))+1}"] = pov_global
+        memoria_livro["ultimo_pov"] = pov_global
 
     memoria = {
         "historico": "",
         "alvo_dialogo": None,
         "forca_alvo": 0,
-        "pov_m": 28 if pov_global == "M" else 0,
-        "pov_f": 28 if pov_global == "F" else 0,
+        "pov_m": 35 if pov_global == "M" else 0,
+        "pov_f": 35 if pov_global == "F" else 0,
         "pov_global": pov_global,
+        "fantasia": fantasia,
     }
 
     saida = []
@@ -737,37 +778,38 @@ def revisar_genero_sequencia(originais, traduzidas):
         texto = str(traduzido or "")
         original = str(original or "")
 
+        aprender_personagens_do_trecho(original, texto, memoria_livro)
+
         score_m, score_f = _pontuar_genero_pov(original, texto)
-        memoria["pov_m"] = min(40, memoria.get("pov_m", 0) + score_m)
-        memoria["pov_f"] = min(40, memoria.get("pov_f", 0) + score_f)
+        memoria["pov_m"] = min(60, memoria.get("pov_m", 0) + score_m)
+        memoria["pov_f"] = min(60, memoria.get("pov_f", 0) + score_f)
 
-        genero_pov = pov_global or detectar_genero_pov_seguro(original, texto, memoria)
+        if pov_global == "EXTERNO":
+            genero_pov = None
+        else:
+            genero_pov = pov_global or detectar_genero_pov_seguro(original, texto, memoria)
 
-        # 1) correção normal
+        # Correção segura/forte de primeira pessoa. Em fantasia exige confiança maior.
         texto = corrigir_genero_primeira_pessoa(texto, genero_pov)
+        texto = corrigir_genero_primeira_pessoa_forte(texto, genero_pov, confianca=confianca_pov, fantasia=fantasia)
 
-        # 2) correção forte para primeira pessoa
-        texto = corrigir_genero_primeira_pessoa_forte(texto, genero_pov)
-
-        # 3) memória de diálogo
-        texto = corrigir_genero_por_memoria_dialogo(original, texto, memoria)
-
-        # 4) reforço especial do caso kid/squirt -> garota quando havia princesa/filha antes
-        texto = corrigir_dialogo_feminino_forte(original, texto, memoria)
-
+        # Diálogo/apelidos por memória e relação.
+        texto = corrigir_genero_por_memoria_dialogo(original, texto, memoria, memoria_livro)
+        texto = corrigir_dialogo_feminino_forte(original, texto, memoria, memoria_livro)
         texto = revisar_texto_final(texto)
 
         saida.append(texto)
 
-        # Atualiza histórico depois de todas as correções.
-        memoria["historico"] = (str(memoria.get("historico", "")) + " " + texto)[-12000:]
+        memoria["historico"] = (str(memoria.get("historico", "")) + " " + texto)[-16000:]
+        memoria_livro["historico_livro"] = (str(memoria_livro.get("historico_livro", "")) + " " + texto)[-60000:]
 
-        # Decaimento leve, mas não derruba o POV global.
+        # Decaimento apenas quando não há POV global confiável.
         if not pov_global:
             memoria["pov_m"] = max(0, memoria.get("pov_m", 0) - 1)
             memoria["pov_f"] = max(0, memoria.get("pov_f", 0) - 1)
 
     return saida
+
 
 def preparar_contexto_para_traducao(textos):
     """Junta parágrafos com separador do estilo Calibre."""
@@ -1547,7 +1589,7 @@ def substituir_texto_no_item(item_html, texto_final):
 
 
 
-async def traduzir_html(html, mecanismo, arquivo_nome=""):
+async def traduzir_html(html, mecanismo, arquivo_nome="", memoria_livro=None):
     html = limpar_lixo_tecnico_bruto_html(html)
     soup = BeautifulSoup(html, "html.parser")
     soup = limpar_sites_soup(soup)
@@ -1605,7 +1647,7 @@ async def traduzir_html(html, mecanismo, arquivo_nome=""):
                 erro["capitulo"] = capitulo
                 erros.append(erro)
 
-    todos_traduzidos = revisar_genero_sequencia(todos_originais, todos_traduzidos)
+    todos_traduzidos = revisar_genero_sequencia(todos_originais, todos_traduzidos, memoria_livro=memoria_livro, capitulo=capitulo)
 
     for item, texto_traduzido in zip(todos_itens, todos_traduzidos):
         _, node_or_tag, original = item
@@ -2093,6 +2135,9 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
 
     total = len(documentos) or 1
 
+    # Memória temporária do livro inteiro: nasce aqui e morre quando termina o EPUB.
+    memoria_livro = criar_memoria_livro()
+
     for i, nome in enumerate(documentos, start=1):
         if user_id in cancelamentos:
             raise Exception("Tradução cancelada.")
@@ -2105,6 +2150,7 @@ async def traduzir_epub(entrada, saida, mecanismo, user_id, mensagem=None, adici
                     conteudo,
                     mecanismo,
                     nome,
+                    memoria_livro=memoria_livro,
                 )
 
                 for erro in erros_html:
