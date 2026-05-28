@@ -282,7 +282,7 @@ def corrigir_coerencia_contextual(original, traduzido):
 
 
 # ==================================================
-# MEMÓRIA GLOBAL + REVISOR SEGURO DE GÊNERO — VERSÃO 4
+# MEMÓRIA GLOBAL + REVISOR SEGURO DE GÊNERO — VERSÃO 5
 # ==================================================
 # NÃO usa IA externa.
 # Foi feito para romance, fantasia, harém reverso e dual/multi POV.
@@ -645,9 +645,131 @@ def corrigir_genero_primeira_pessoa_forte(texto, genero_pov, confianca=0, fantas
     return novo
 
 
+
+def _tem_marcador_primeira_pessoa(texto):
+    t = str(texto or "")
+    return re.search(
+        r"\b(eu|me|meu|minha|comigo|estou|tô|to|fiquei|fico|sou|estava|tava|vou\s+ficar|me\s+sinto|sinto-me)\b",
+        t,
+        flags=re.I,
+    ) is not None
+
+
+def _corrigir_concordancia_local_segura(texto):
+    """
+    Corrige erros gramaticais óbvios sem tentar adivinhar contexto.
+    Útil para casos de harém reverso em que a revisão puxou feminino demais:
+    - outro garota -> outro garoto
+    - o garota -> o garoto
+    - uma garoto -> uma garota
+    """
+    if not texto:
+        return texto
+
+    novo = str(texto)
+
+    trocas_regex = [
+        (r"\b(o|um|outro|esse|este|aquele|mesmo)\s+garota\b", r"\1 garoto"),
+        (r"\b(o|um|outro|esse|este|aquele|mesmo)\s+menina\b", r"\1 menino"),
+        (r"\b(o|um|outro|esse|este|aquele|mesmo)\s+pequena\b", r"\1 pequeno"),
+        (r"\b(o|um|outro|esse|este|aquele|mesmo)\s+querida\b", r"\1 querido"),
+        (r"\b(a|uma|outra|essa|esta|aquela|mesma)\s+garoto\b", r"\1 garota"),
+        (r"\b(a|uma|outra|essa|esta|aquela|mesma)\s+menino\b", r"\1 menina"),
+        (r"\b(a|uma|outra|essa|esta|aquela|mesma)\s+pequeno\b", r"\1 pequena"),
+        (r"\b(a|uma|outra|essa|esta|aquela|mesma)\s+querido\b", r"\1 querida"),
+    ]
+
+    for padrao, repl in trocas_regex:
+        novo = re.sub(padrao, repl, novo, flags=re.I)
+
+    return novo
+
+
+def _grupo_masculino_recente(memoria):
+    hist = str((memoria or {}).get("historico", "") or "").lower()[-6000:]
+    if not hist:
+        return False
+
+    pistas_m = [
+        "garotos", "homens", "caras", "rapazes", "meninos", "meus garotos",
+        "tyler", "josh", "ethan", "hud", "hayes", "dallas", "charlie",
+    ]
+    pistas_f = ["garotas", "mulheres", "meninas", "amigas", "minhas garotas", "minhas amigas"]
+
+    score_m = sum(hist.count(p) for p in pistas_m)
+    score_f = sum(hist.count(p) for p in pistas_f)
+
+    # Dois nomes masculinos ou palavra de grupo masculina recente já é pista boa.
+    nomes_m = len(set(re.findall(r"\b(tyler|josh|ethan|hud|hayes|dallas|charlie)\b", hist)))
+    if nomes_m >= 2:
+        score_m += 3
+
+    return score_m >= score_f + 2 and score_m >= 2
+
+
+def _corrigir_plural_grupo_seguro(original, texto, memoria):
+    """
+    Corrige 'elas' para 'eles' quando o contexto recente é claramente grupo masculino/misto.
+    Não mexe se houver pista feminina forte na própria frase.
+    """
+    if not texto:
+        return texto
+
+    novo = str(texto)
+    frase_l = novo.lower()
+    original_l = str(original or "").lower()
+
+    # Só mexe quando o original é plural neutro/masculino em inglês ou quando há grupo masculino recente.
+    original_plural = re.search(r"\b(they|them|their|boys|guys|men)\b", original_l, flags=re.I)
+    grupo_m = _grupo_masculino_recente(memoria)
+
+    if not (grupo_m or original_plural):
+        return novo
+
+    # Não mexe se a frase fala explicitamente de mulheres/amigas/garotas.
+    if re.search(r"\b(amigas|mulheres|garotas|meninas|minhas garotas|minhas amigas)\b", frase_l, flags=re.I):
+        return novo
+
+    novo = re.sub(r"\bElas\s+confiam\b", "Eles confiam", novo, flags=re.I)
+    novo = re.sub(r"\belas\s+confiam\b", "eles confiam", novo, flags=re.I)
+    novo = re.sub(r"\bElas\s+podiam\b", "Eles podiam", novo, flags=re.I)
+    novo = re.sub(r"\belas\s+podiam\b", "eles podiam", novo, flags=re.I)
+    novo = re.sub(r"\bElas\s+fizeram\b", "Eles fizeram", novo, flags=re.I)
+    novo = re.sub(r"\belas\s+fizeram\b", "eles fizeram", novo, flags=re.I)
+
+    return novo
+
+
+def _corrigir_primo_prima_seguro(original, texto, memoria):
+    """
+    Não tenta adivinhar todo cousin/primo/prima.
+    Só corrige o caso mais comum em harém reverso: 'a prima dele' quando o histórico aponta
+    para grupo masculino e não há mulher explícita na frase.
+    """
+    if not texto:
+        return texto
+
+    novo = str(texto)
+    original_l = str(original or "").lower()
+    frase_l = novo.lower()
+
+    if not re.search(r"\b(cousin|male cousin|his cousin)\b", original_l, flags=re.I) and "prima dele" not in frase_l:
+        return novo
+
+    if re.search(r"\b(ela|dela|mulher|garota|menina|female cousin)\b", original_l, flags=re.I):
+        return novo
+
+    if _grupo_masculino_recente(memoria) or re.search(r"\b(his cousin|male cousin)\b", original_l, flags=re.I):
+        novo = re.sub(r"\ba\s+prima\s+dele\b", "o primo dele", novo, flags=re.I)
+        novo = re.sub(r"\bprima\s+dele\b", "primo dele", novo, flags=re.I)
+
+    return novo
+
+
 def corrigir_genero_por_memoria_dialogo(original, texto, memoria, memoria_livro=None):
     if not texto:
         return texto
+
     memoria = memoria or {}
     novo = str(texto)
     original_l = str(original or "").lower()
@@ -655,24 +777,26 @@ def corrigir_genero_por_memoria_dialogo(original, texto, memoria, memoria_livro=
     hist_longo = (hist + " " + novo)[-9000:].lower()
     hist_curto = (hist + " " + novo)[-2500:].lower()
 
+    # V5: em fantasia/harém reverso, a memória de diálogo NÃO pode feminizar todo mundo.
+    # Ela serve principalmente para apelidos neutros do original (kid, squirt, baby etc.).
     if _texto_indica_feminino(hist_longo) and not _tem_bloqueio_masculino_real(hist_curto):
         memoria["alvo_dialogo"] = "F"
-        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 3)
+        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 2)
     elif _texto_indica_masculino(hist_longo) and not _tem_bloqueio_feminino_real(hist_curto):
         if not any(p in hist_curto for p in ["princesa", "filha", "menina", "garota", "pequena"]):
             memoria["alvo_dialogo"] = "M"
-            memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 3)
+            memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 2)
 
     alvo = memoria.get("alvo_dialogo")
     forca = memoria.get("forca_alvo", 0)
     fantasia = bool(memoria.get("fantasia") or (memoria_livro or {}).get("fantasia"))
-    limite = 7 if fantasia else 4
+    limite = 11 if fantasia else 6
 
     original_tem_apelido_neutro = re.search(APELIDOS_NEUTROS_ORIGINAL, original_l, flags=re.I)
     original_tem_feminino = any(re.search(p, original_l, flags=re.I) for p in RELACOES_FEM_ORIGINAL)
     original_tem_masculino = any(re.search(p, original_l, flags=re.I) for p in RELACOES_MASC_ORIGINAL)
 
-    # Se o original aponta para nome conhecido no livro, usa o gênero aprendido.
+    # Se o original aponta para nome conhecido no livro, usa o gênero aprendido com cuidado.
     genero_nome = None
     conf_nome = 0
     if memoria_livro:
@@ -681,32 +805,34 @@ def corrigir_genero_por_memoria_dialogo(original, texto, memoria, memoria_livro=
             if conf > conf_nome:
                 genero_nome, conf_nome = g, conf
 
-    if genero_nome and conf_nome >= 6:
+    if genero_nome and conf_nome >= 10:
         alvo = genero_nome
         forca = max(forca, min(14, conf_nome))
 
-    # Feminino: kid/squirt/baby/honey quando histórico tem princess/daughter/girl.
-    if alvo == "F" and forca >= limite and (original_tem_apelido_neutro or original_tem_feminino or re.search(r"\bgaroto\b|\bpequeno\b|\bquerido\b", novo, flags=re.I)):
+    # V5: só corrige garoto/garota por diálogo se houver apelido/relação no ORIGINAL.
+    # Isso impede 'outro garoto' virar 'outro garota' só porque o POV é feminino.
+    if alvo == "F" and forca >= limite and (original_tem_apelido_neutro or original_tem_feminino):
         if not _tem_bloqueio_masculino_real(novo):
             novo = _trocar_palavra(novo, "garoto", "garota")
             novo = _trocar_palavra(novo, "pequeno", "pequena")
             novo = _trocar_palavra(novo, "querido", "querida")
-            novo = _trocar_palavra(novo, "bonito", "bonita")
-            novo = _trocar_palavra(novo, "lindo", "linda")
     elif alvo == "M" and forca >= limite and (original_tem_apelido_neutro or original_tem_masculino):
         if not _tem_bloqueio_feminino_real(novo):
             novo = _trocar_palavra(novo, "garota", "garoto")
             novo = _trocar_palavra(novo, "pequena", "pequeno")
             novo = _trocar_palavra(novo, "querida", "querido")
-            novo = _trocar_palavra(novo, "bonita", "bonito")
-            novo = _trocar_palavra(novo, "linda", "lindo")
 
-    if _texto_indica_feminino(novo):
+    # Correções locais seguras para problemas de concordância e grupo.
+    novo = _corrigir_concordancia_local_segura(novo)
+    novo = _corrigir_plural_grupo_seguro(original, novo, memoria)
+    novo = _corrigir_primo_prima_seguro(original, novo, memoria)
+
+    if _texto_indica_feminino(novo) and (original_tem_apelido_neutro or original_tem_feminino):
         memoria["alvo_dialogo"] = "F"
-        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 2)
-    elif _texto_indica_masculino(novo) and not any(p in hist_curto for p in ["princesa", "filha", "menina", "garota"]):
+        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 1)
+    elif _texto_indica_masculino(novo) and (original_tem_apelido_neutro or original_tem_masculino):
         memoria["alvo_dialogo"] = "M"
-        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 2)
+        memoria["forca_alvo"] = min(18, memoria.get("forca_alvo", 0) + 1)
 
     memoria["historico"] = (hist + " " + novo)[-14000:]
     memoria["forca_alvo"] = max(0, memoria.get("forca_alvo", 0) - 1)
@@ -716,37 +842,41 @@ def corrigir_genero_por_memoria_dialogo(original, texto, memoria, memoria_livro=
 def corrigir_dialogo_feminino_forte(original, texto, memoria, memoria_livro=None):
     if not texto:
         return texto
+
     novo = str(texto)
     original_l = str(original or "").lower()
     hist = str(memoria.get("historico", "") or "").lower()
-    hist_livro = str((memoria_livro or {}).get("historico_livro", "") or "").lower()
 
-    feminino_recente = any(p in hist[-6000:] for p in [
-        "princesa", "filha", "menina", "garota", "pequena", "minha filha", "minha garota", "senhorita"
+    feminino_recente = any(p in hist[-3500:] for p in [
+        "princesa", "filha", "menina", "minha filha", "senhorita"
     ])
-    feminino_livro = "fem_rel" in hist_livro[-12000:]
+
     masculino_real_agora = _tem_bloqueio_masculino_real(novo)
     apelido_neutro_original = re.search(APELIDOS_NEUTROS_ORIGINAL, original_l, flags=re.I)
+    relacao_fem_original = any(re.search(p, original_l, flags=re.I) for p in RELACOES_FEM_ORIGINAL)
 
-    if (feminino_recente or feminino_livro) and not masculino_real_agora:
-        if apelido_neutro_original or re.search(r"\bgaroto\b|\bpequeno\b|\bquerido\b", novo, flags=re.I):
-            novo = _trocar_palavra(novo, "garoto", "garota")
-            novo = _trocar_palavra(novo, "pequeno", "pequena")
-            novo = _trocar_palavra(novo, "querido", "querida")
+    # V5: removido o gatilho 'fem_rel do livro inteiro', porque ele prejudicava harém reverso.
+    # Agora só corrige quando a frase ORIGINAL tem apelido neutro/relação feminina e o contexto recente confirma.
+    if feminino_recente and not masculino_real_agora and (apelido_neutro_original or relacao_fem_original):
+        novo = _trocar_palavra(novo, "garoto", "garota")
+        novo = _trocar_palavra(novo, "pequeno", "pequena")
+        novo = _trocar_palavra(novo, "querido", "querida")
+
+    novo = _corrigir_concordancia_local_segura(novo)
+    novo = _corrigir_plural_grupo_seguro(original, novo, memoria)
+    novo = _corrigir_primo_prima_seguro(original, novo, memoria)
     return novo
 
 
 def revisar_genero_sequencia(originais, traduzidas, memoria_livro=None, capitulo=""):
     """
     Revisão GLOBAL ordenada do capítulo/arquivo interno.
-    VERSÃO 4:
-    1. memória temporária do livro inteiro;
-    2. dicionário automático de personagens;
-    3. memória de POV por capítulo;
-    4. modo narrador externo/autora;
-    5. corretor forte de primeira pessoa;
-    6. memória de relação;
-    7. sistema de confiança conservador para fantasia/harém reverso.
+    VERSÃO 5:
+    - mantém o ganho da V4;
+    - fica mais conservadora para harém reverso/fantasia;
+    - corrige forte apenas primeira pessoa do POV;
+    - não feminiza terceiros só porque a narradora é mulher;
+    - adiciona correções locais seguras: outro garota -> outro garoto, elas/eles por grupo.
     """
     if memoria_livro is None:
         memoria_livro = criar_memoria_livro()
@@ -789,13 +919,18 @@ def revisar_genero_sequencia(originais, traduzidas, memoria_livro=None, capitulo
         else:
             genero_pov = pov_global or detectar_genero_pov_seguro(original, texto, memoria)
 
-        # Correção segura/forte de primeira pessoa. Em fantasia exige confiança maior.
+        # Em fantasia/harém, correção de POV só deve atuar em primeira pessoa.
         texto = corrigir_genero_primeira_pessoa(texto, genero_pov)
         texto = corrigir_genero_primeira_pessoa_forte(texto, genero_pov, confianca=confianca_pov, fantasia=fantasia)
 
-        # Diálogo/apelidos por memória e relação.
+        # Diálogo/apelidos agora é conservador: depende do ORIGINAL, não do POV feminino.
         texto = corrigir_genero_por_memoria_dialogo(original, texto, memoria, memoria_livro)
         texto = corrigir_dialogo_feminino_forte(original, texto, memoria, memoria_livro)
+
+        # Correções gramaticais seguras finais.
+        texto = _corrigir_concordancia_local_segura(texto)
+        texto = _corrigir_plural_grupo_seguro(original, texto, memoria)
+        texto = _corrigir_primo_prima_seguro(original, texto, memoria)
         texto = revisar_texto_final(texto)
 
         saida.append(texto)
@@ -803,7 +938,6 @@ def revisar_genero_sequencia(originais, traduzidas, memoria_livro=None, capitulo
         memoria["historico"] = (str(memoria.get("historico", "")) + " " + texto)[-16000:]
         memoria_livro["historico_livro"] = (str(memoria_livro.get("historico_livro", "")) + " " + texto)[-60000:]
 
-        # Decaimento apenas quando não há POV global confiável.
         if not pov_global:
             memoria["pov_m"] = max(0, memoria.get("pov_m", 0) - 1)
             memoria["pov_f"] = max(0, memoria.get("pov_f", 0) - 1)
