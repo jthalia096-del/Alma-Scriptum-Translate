@@ -2778,5 +2778,221 @@ def main():
     app.run_polling()
 
 
+
+# ==================================================
+# VERSÃO 7 — MEMÓRIA INTELIGENTE + CORREÇÃO CIRÚRGICA
+# ==================================================
+# Esta camada substitui a revisão global anterior por uma revisão MAIS SEGURA.
+# A memória continua existindo, mas ela NÃO pode reescrever frases inteiras.
+# Ela só ajuda a decidir gênero em trocas pontuais:
+# - primeira pessoa: irritado/irritada, cansado/cansada, obrigado/obrigada etc.
+# - grupo: eles/elas quando houver grupo masculino/misto claro
+# - relações: primo/prima, garoto/garota apenas quando houver pista forte
+# - my boys: evita virar meus filhos quando o sentido é meus garotos
+
+
+def detectar_pov_local_janela(originais, traduzidas, idx, memoria_livro=None, janela=6):
+    """
+    Detecta POV no BLOCO/JANELA local, não no capítulo inteiro.
+    Isso evita erro em capítulos com dois gêneros, sonhos, memórias, telepatia e diálogos misturados.
+    Retorna (genero, confianca).
+    """
+    inicio = max(0, idx - janela)
+    fim = min(len(originais), idx + 1)
+    original_local = " ".join(str(x or "") for x in originais[inicio:fim])
+    traduzido_local = " ".join(str(x or "") for x in traduzidas[inicio:fim])
+
+    if detectar_narrador_externo(originais[inicio:fim], traduzidas[inicio:fim]):
+        return None, 0
+
+    score_m, score_f = _pontuar_genero_pov(original_local, traduzido_local)
+
+    # O POV principal do livro ajuda, mas não manda sozinho.
+    if memoria_livro:
+        pov_principal = memoria_livro.get("pov_principal")
+        conf_principal = int(memoria_livro.get("pov_principal_conf", 0) or 0)
+        bonus = min(5, conf_principal // 12)
+        if pov_principal == "M":
+            score_m += bonus
+        elif pov_principal == "F":
+            score_f += bonus
+
+    if score_m >= score_f + 3 and score_m >= 5:
+        return "M", score_m
+    if score_f >= score_m + 3 and score_f >= 5:
+        return "F", score_f
+    return None, max(score_m, score_f)
+
+
+def corrigir_my_boys_sem_filhos(original, texto, memoria_livro=None):
+    """
+    Evita que 'my boys'/'my guys' em romance/harém vire 'meus filhos'.
+    Só preserva 'filhos' se o original indicar filhos/crianças de verdade.
+    """
+    if not texto:
+        return texto
+
+    original_l = str(original or "").lower()
+    novo = str(texto)
+
+    tem_meus_garotos = re.search(r"\b(my|our)\s+(boys|guys)\b", original_l, flags=re.I)
+    filhos_reais = re.search(
+        r"\b(children|kids|sons|my sons|our sons|school|homework|little boys|toddlers|babies|child)\b",
+        original_l,
+        flags=re.I,
+    )
+
+    if tem_meus_garotos and not filhos_reais:
+        novo = re.sub(r"\bmeus\s+filhos\b", "meus garotos", novo, flags=re.I)
+        novo = re.sub(r"\bnossos\s+filhos\b", "nossos garotos", novo, flags=re.I)
+        novo = re.sub(r"\bmeus\s+meninos\b", "meus garotos", novo, flags=re.I)
+        novo = re.sub(r"\bnossos\s+meninos\b", "nossos garotos", novo, flags=re.I)
+
+    return novo
+
+
+def corrigir_apelido_neutro_cirurgico(original, texto, memoria, memoria_livro=None):
+    """
+    Corrige garoto/garota apenas quando o original traz apelido neutro
+    (kid, baby, sweetheart...) e o contexto recente confirma o alvo.
+    Não mexe em 'boy'/'girl' explícito do original.
+    """
+    if not texto:
+        return texto
+
+    original_l = str(original or "").lower()
+    novo = str(texto)
+
+    if not re.search(APELIDOS_NEUTROS_ORIGINAL, original_l, flags=re.I):
+        return novo
+
+    hist = str((memoria or {}).get("historico", "") or "").lower()[-4000:]
+    alvo_f = any(p in hist for p in ["princesa", "filha", "menina", "garota", "senhorita", "minha filha"])
+    alvo_m = any(p in hist for p in ["príncipe", "principe", "filho", "menino", "garoto", "meu filho", "meu garoto"])
+
+    # Usa personagens aprendidos apenas se houver nome explícito no original.
+    if memoria_livro:
+        for nome in extrair_nomes_provaveis(original):
+            g, conf = genero_personagem(memoria_livro, nome)
+            if conf >= 8:
+                if g == "F":
+                    alvo_f = True
+                elif g == "M":
+                    alvo_m = True
+
+    if alvo_f and not alvo_m and not _tem_bloqueio_masculino_real(novo):
+        novo = _trocar_palavra(novo, "garoto", "garota")
+        novo = _trocar_palavra(novo, "pequeno", "pequena")
+        novo = _trocar_palavra(novo, "querido", "querida")
+    elif alvo_m and not alvo_f and not _tem_bloqueio_feminino_real(novo):
+        novo = _trocar_palavra(novo, "garota", "garoto")
+        novo = _trocar_palavra(novo, "pequena", "pequeno")
+        novo = _trocar_palavra(novo, "querida", "querido")
+
+    return novo
+
+
+def atualizar_memoria_grupo_v7(original, traduzido, memoria_livro):
+    """Atualiza memória de grupos sem alterar texto."""
+    if not memoria_livro:
+        return
+    original_l = str(original or "").lower()
+    traduzido_l = str(traduzido or "").lower()
+
+    if re.search(r"\b(boys|guys|men|brothers|mates|boyfriends|husbands)\b", original_l, flags=re.I):
+        memoria_livro["grupo_masculino_conf"] = min(120, memoria_livro.get("grupo_masculino_conf", 0) + 5)
+    if re.search(r"\b(girls|women|sisters|girlfriends|wives)\b", original_l, flags=re.I):
+        memoria_livro["grupo_feminino_conf"] = min(120, memoria_livro.get("grupo_feminino_conf", 0) + 5)
+
+    if re.search(r"\b(meus garotos|os garotos|homens|caras|rapazes)\b", traduzido_l, flags=re.I):
+        memoria_livro["grupo_masculino_conf"] = min(120, memoria_livro.get("grupo_masculino_conf", 0) + 3)
+    if re.search(r"\b(minhas garotas|as garotas|mulheres|meninas|amigas)\b", traduzido_l, flags=re.I):
+        memoria_livro["grupo_feminino_conf"] = min(120, memoria_livro.get("grupo_feminino_conf", 0) + 3)
+
+
+def revisar_genero_sequencia(originais, traduzidas, memoria_livro=None, capitulo=""):
+    """
+    Revisão GLOBAL ordenada — VERSÃO 7 CIRÚRGICA.
+
+    Mantém as memórias boas:
+    - livro inteiro;
+    - personagens;
+    - grupo;
+    - relações;
+    - POV dominante como APOIO;
+    - POV local por janela.
+
+    Mas limita o revisor:
+    - NÃO reescreve frase;
+    - NÃO muda ordem de palavras;
+    - NÃO mexe em verbos/estrutura;
+    - só corrige gênero pontual e casos seguros.
+    """
+    if memoria_livro is None:
+        memoria_livro = criar_memoria_livro()
+
+    original_all = " ".join(str(x or "") for x in originais)
+    traduzido_all = " ".join(str(x or "") for x in traduzidas)
+    fantasia = detectar_cena_fantasia_ou_confusa(original_all, traduzido_all) or bool(memoria_livro.get("fantasia"))
+    if fantasia:
+        memoria_livro["fantasia"] = True
+
+    # Detecta POV do capítulo apenas para aprender o POV principal do livro.
+    # Não será usado como regra absoluta para corrigir terceiros.
+    pov_global, confianca_pov_global = detectar_pov_global_capitulo(originais, traduzidas, memoria_livro, capitulo)
+    if pov_global in ["M", "F"]:
+        atualizar_pov_principal_livro(memoria_livro, pov_global, confianca_pov_global)
+        memoria_livro.setdefault("pov_capitulos", {})[capitulo or f"cap_{len(memoria_livro.get('pov_capitulos', {}))+1}"] = pov_global
+
+    memoria = {
+        "historico": "",
+        "alvo_dialogo": None,
+        "forca_alvo": 0,
+        "pov_m": 0,
+        "pov_f": 0,
+        "pov_global": None,
+        "fantasia": fantasia,
+    }
+
+    saida = []
+
+    for idx, (original, traduzido) in enumerate(zip(originais, traduzidas)):
+        texto = str(traduzido or "")
+        original = str(original or "")
+
+        # 1) Aprende contexto, mas ainda não altera texto.
+        aprender_personagens_do_trecho(original, texto, memoria_livro)
+        atualizar_memoria_grupo_v7(original, texto, memoria_livro)
+
+        # 2) Detecta POV local por janela. O POV principal só apoia primeira pessoa.
+        genero_pov, conf_local = detectar_pov_local_janela(originais, traduzidas, idx, memoria_livro, janela=6)
+        if genero_pov is None and memoria_livro.get("pov_principal_conf", 0) >= 30:
+            genero_pov = memoria_livro.get("pov_principal")
+            conf_local = min(12, memoria_livro.get("pov_principal_conf", 0) // 4)
+
+        # 3) Correção de primeira pessoa — segura e restrita.
+        # Só mexe em adjetivos perto de eu/me/meu/minha/estou/sou/vou ficar.
+        texto = corrigir_genero_primeira_pessoa(texto, genero_pov)
+        texto = corrigir_genero_primeira_pessoa_forte(texto, genero_pov, confianca=conf_local, fantasia=fantasia)
+
+        # 4) Correções pontuais e seguras. Nada de reescrever frase inteira.
+        texto = corrigir_my_boys_sem_filhos(original, texto, memoria_livro)
+        texto = corrigir_apelido_neutro_cirurgico(original, texto, memoria, memoria_livro)
+        texto = _corrigir_concordancia_local_segura(texto)
+        texto = _corrigir_plural_grupo_seguro(original, texto, memoria, memoria_livro)
+        texto = _corrigir_primo_prima_seguro(original, texto, memoria)
+        texto = corrigir_alvo_voce_por_contexto(original, texto, memoria, memoria_livro)
+        texto = corrigir_pronome_objeto_parenteses(original, texto, memoria, memoria_livro)
+        texto = revisar_texto_final(texto)
+
+        saida.append(texto)
+
+        # 5) Atualiza histórico depois das correções, para próximos blocos.
+        memoria["historico"] = (str(memoria.get("historico", "")) + " " + texto)[-16000:]
+        memoria_livro["historico_livro"] = (str(memoria_livro.get("historico_livro", "")) + " " + texto)[-60000:]
+
+    return saida
+
+
 if __name__ == "__main__":
     main()
