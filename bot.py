@@ -36,6 +36,20 @@ BASE_DIR = Path(__file__).parent
 TEMP_DIR = BASE_DIR / "temp"
 TEMP_DIR.mkdir(exist_ok=True)
 
+import shutil
+
+VERSAO_BOT = "VERSAO_TESTE_LIMPA_01"
+print("🚀 BOT INICIADO:", VERSAO_BOT, flush=True)
+
+for pasta in ["temp", "cache", "downloads", "__pycache__"]:
+    caminho = BASE_DIR / pasta
+    if caminho.exists():
+        shutil.rmtree(caminho, ignore_errors=True)
+    caminho.mkdir(exist_ok=True)
+
+print("🧹 TEMP/CACHE LIMPOS COM SUCESSO", flush=True)
+
+
 MARCA_IMAGEM = BASE_DIR / "alma_scriptum.png"
 
 usuarios = {}
